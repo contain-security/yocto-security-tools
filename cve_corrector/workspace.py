@@ -4,7 +4,7 @@
 from pathlib import Path
 from typing import Optional
 
-from .bitbake_ops import cleanup_workspace, find_mirror_repo, get_build_path
+from .bitbake_ops import cleanup_workspace, find_mirror_repo, get_build_path, get_recipe_src_uri_git, get_upstream_check_uri
 from .git_ops import checkout_version, copy_missing_files_from_devtool, deduce_repo_from_patches
 from .ptest import enable_ptest
 from .state import DevtoolError, GitError, MetadataError
@@ -73,6 +73,15 @@ def setup_upstream_remote(workspace_path: Path, mirror_path: Optional[Path],
                           references: Optional[list[dict]] = None) -> Optional[str]:
     """Configure upstream git remote and fetch references.
 
+    Priority for upstream URL:
+      1. Local mirror (if --mirror-dir provided and mirror found)
+      2. Recipe SRC_URI git repo (authoritative source)
+      3. UPSTREAM_CHECK_URI (used by AUH)
+      4. Deduce from hash_details/series/references URLs
+
+    Warns if the deduced URL differs from the recipe's known upstream,
+    as this could indicate a supply-chain mismatch.
+
     Returns:
         Mirror directory name when a local mirror is used, or None.
     """
@@ -84,25 +93,52 @@ def setup_upstream_remote(workspace_path: Path, mirror_path: Optional[Path],
     if mirror_path:
         mirror_name = mirror_path.stem
 
+    # Determine the recipe's authoritative upstream URL for comparison
+    recipe_upstream: Optional[str] = None
+
     if mirror_path:
         upstream_url: Optional[str] = str(mirror_path.absolute())
     else:
-        logger.info("Deducing upstream repo from hash details")
-        urls = [d['url'] for d in hash_details if d.get('url')]
-        if not urls and series:
-            urls = [s['pull_url'] for s in series if s.get('pull_url')]
-            if urls:
-                logger.info("Deducing upstream repo from series pull_url")
-        upstream_url = deduce_repo_from_patches(urls)
-        if not upstream_url and references:
-            logger.info("Falling back to references for upstream deduction")
-            ref_urls = [r['url'] for r in references if r.get('url')]
-            upstream_url = deduce_repo_from_patches(ref_urls)
-        if upstream_url:
-            logger.info("Deduced upstream: %s", upstream_url)
+        # Try SRC_URI git repo first (authoritative)
+        src_uri_git = get_recipe_src_uri_git(recipe)
+        if src_uri_git:
+            logger.info("Using SRC_URI git repo: %s", src_uri_git)
+            upstream_url = src_uri_git
+            recipe_upstream = src_uri_git
         else:
-            logger.warning("Could not deduce upstream repo")
-            return None
+            # Try UPSTREAM_CHECK_URI (used by AUH)
+            check_uri = get_upstream_check_uri(recipe)
+            if check_uri:
+                logger.info("Using UPSTREAM_CHECK_URI: %s", check_uri)
+                upstream_url = check_uri
+                recipe_upstream = check_uri
+            else:
+                # Fall back to deduction from hash_details/references
+                logger.info("No git SRC_URI or UPSTREAM_CHECK_URI, deducing from hash details")
+                urls = [d['url'] for d in hash_details if d.get('url')]
+                if not urls and series:
+                    urls = [s['pull_url'] for s in series if s.get('pull_url')]
+                    if urls:
+                        logger.info("Deducing upstream repo from series pull_url")
+                upstream_url = deduce_repo_from_patches(urls)
+                if not upstream_url and references:
+                    logger.info("Falling back to references for upstream deduction")
+                    ref_urls = [r['url'] for r in references if r.get('url')]
+                    upstream_url = deduce_repo_from_patches(ref_urls)
+                if upstream_url:
+                    logger.info("Deduced upstream: %s", upstream_url)
+                else:
+                    logger.warning("Could not deduce upstream repo")
+                    return None
+
+        # Warn if deduced URL differs from recipe's known upstream
+        if recipe_upstream and upstream_url != recipe_upstream:
+            deduced = deduce_repo_from_patches(
+                [d['url'] for d in hash_details if d.get('url')])
+            if deduced and _urls_differ(deduced, recipe_upstream):
+                logger.warning(
+                    "⚠ Deduced upstream (%s) differs from recipe SRC_URI (%s) "
+                    "— verify patch origin", deduced, recipe_upstream)
 
     logger.info("Adding upstream remote: %s", upstream_url)
     assert upstream_url is not None
@@ -117,6 +153,15 @@ def setup_upstream_remote(workspace_path: Path, mirror_path: Optional[Path],
         raise GitError("Git operation failed")
 
     return mirror_name
+
+
+def _urls_differ(url_a: str, url_b: str) -> bool:
+    """Compare two git URLs ignoring protocol and .git suffix differences."""
+    def normalize(url: str) -> str:
+        return (url.rstrip('/').removesuffix('.git')
+                .replace('https://', '').replace('http://', '')
+                .replace('git://', ''))
+    return normalize(url_a) != normalize(url_b)
 
 
 def prepare_cve_branch(workspace_path: Path, version: Optional[str],

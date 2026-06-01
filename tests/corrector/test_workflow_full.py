@@ -460,7 +460,9 @@ class TestSetupUpstreamRemoteSeriesFallback:
     @patch("cve_corrector.workspace.run_cmd", return_value=0)
     @patch("cve_corrector.workspace.run_cmd_capture")
     @patch("cve_corrector.workspace.find_mirror_repo", return_value=None)
-    def test_deduces_from_series_pull_url(self, mock_mirror, mock_capture, mock_cmd, tmp_path):
+    @patch("cve_corrector.workspace.get_upstream_check_uri", return_value=None)
+    @patch("cve_corrector.workspace.get_recipe_src_uri_git", return_value=None)
+    def test_deduces_from_series_pull_url(self, mock_src, mock_check, mock_mirror, mock_capture, mock_cmd, tmp_path):
         """When hash_details is empty, deduce upstream from series pull_url."""
         ws = tmp_path / "ws"
         ws.mkdir()
@@ -480,7 +482,9 @@ class TestSetupUpstreamRemoteSeriesFallback:
     @patch("cve_corrector.workspace.run_cmd", return_value=0)
     @patch("cve_corrector.workspace.run_cmd_capture")
     @patch("cve_corrector.workspace.find_mirror_repo", return_value=None)
-    def test_hash_details_takes_priority(self, mock_mirror, mock_capture, mock_cmd, tmp_path):
+    @patch("cve_corrector.workspace.get_upstream_check_uri", return_value=None)
+    @patch("cve_corrector.workspace.get_recipe_src_uri_git", return_value=None)
+    def test_hash_details_takes_priority(self, mock_src, mock_check, mock_mirror, mock_capture, mock_cmd, tmp_path):
         """hash_details URLs are tried before series pull_url."""
         ws = tmp_path / "ws"
         ws.mkdir()
@@ -498,7 +502,9 @@ class TestSetupUpstreamRemoteSeriesFallback:
             cwd=ws)
 
     @patch("cve_corrector.workspace.find_mirror_repo", return_value=None)
-    def test_returns_none_when_no_urls(self, mock_mirror, tmp_path):
+    @patch("cve_corrector.workspace.get_upstream_check_uri", return_value=None)
+    @patch("cve_corrector.workspace.get_recipe_src_uri_git", return_value=None)
+    def test_returns_none_when_no_urls(self, mock_src, mock_check, mock_mirror, tmp_path):
         """Returns None when neither hash_details nor series have URLs."""
         ws = tmp_path / "ws"
         ws.mkdir()
