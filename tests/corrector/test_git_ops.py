@@ -52,11 +52,16 @@ def test_deduce_repo_savannah_git():
 
 def test_deduce_repo_gitlab():
     url = "https://gitlab.com/foo/bar/-/commit/abc123"
-    assert deduce_repo_from_patches([url]) == "https://gitlab.com/foo/bar/"
+    assert deduce_repo_from_patches([url]) == "https://gitlab.com/foo/bar"
 
 
 def test_deduce_repo_skips_bugzilla():
     assert deduce_repo_from_patches(["https://bugzilla.redhat.com/show_bug.cgi?id=123"]) is None
+
+
+def test_deduce_repo_gitweb_generic():
+    url = "https://git.samba.org/?p=rsync.git;a=commit;h=8ad4b5d912fad1df29717dddaa775724da77d299"
+    assert deduce_repo_from_patches([url]) == "https://git.samba.org/rsync.git"
 
 
 def test_deduce_repo_empty_list():
