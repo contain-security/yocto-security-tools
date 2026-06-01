@@ -131,6 +131,60 @@ def deduce_meta_layer_from_recipe(recipe: str) -> Optional[Path]:
     return None
 
 
+def get_recipe_src_uri_git(recipe: str) -> Optional[str]:
+    """Extract git repository URL from recipe's SRC_URI.
+
+    Returns the first git:// or https:// repo URL found in SRC_URI,
+    or None if the recipe uses tarballs.
+    """
+    result = run_cmd_capture(['bitbake-getvar', 'SRC_URI', '-r', recipe])
+    for line in result.stdout.splitlines():
+        if line.startswith('SRC_URI='):
+            src_uri = line.split('=', 1)[1].strip('"')
+            for entry in src_uri.split():
+                if entry.startswith('git://') or entry.startswith('gitsm://'):
+                    # Convert git:// to https:// for fetch
+                    url = entry.split(';')[0]
+                    url = re.sub(r'^gitsm?://', 'https://', url)
+                    return url
+                if entry.startswith(('https://', 'http://')) and '.git' in entry.split(';')[0]:
+                    return entry.split(';')[0]
+    return None
+
+
+def get_upstream_check_uri(recipe: str) -> Optional[str]:
+    """Get UPSTREAM_CHECK_URI from recipe if it points to a git repository.
+
+    Only returns the URI if it looks like a cloneable git repo URL
+    (not a releases page, tarball directory, or web page).
+    """
+    result = run_cmd_capture(['bitbake-getvar', 'UPSTREAM_CHECK_URI', '-r', recipe])
+    for line in result.stdout.splitlines():
+        if line.startswith('UPSTREAM_CHECK_URI='):
+            uri = line.split('=', 1)[1].strip('"').strip()
+            if not uri:
+                return None
+            # Skip release pages, download directories, and web pages
+            skip = ('/releases', '/downloads', '/tags', '/archive',
+                    'ftp.', 'download.', '.html', '.php')
+            if any(s in uri for s in skip):
+                return None
+            # Must end in .git or be a known git forge path
+            if uri.endswith('.git'):
+                return uri
+            # GitHub/GitLab repo root (no subpath beyond org/repo)
+            for forge in ('github.com/', 'gitlab.com/', 'gitlab.'):
+                if forge in uri:
+                    # e.g. https://github.com/org/repo — valid
+                    # e.g. https://github.com/org/repo/releases — skipped above
+                    parts = uri.rstrip('/').split('/')
+                    if forge.startswith('github') or forge.startswith('gitlab'):
+                        idx = next((i for i, p in enumerate(parts) if forge.rstrip('/') in p), -1)
+                        if idx >= 0 and len(parts) == idx + 3:
+                            return uri
+    return None
+
+
 def resolve_meta_layer(meta_layer: Path) -> Path:
     """Resolve meta-layer to absolute path using bblayers.conf."""
     if meta_layer.is_absolute() and meta_layer.exists():
