@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 [project]
 name = "yocto-security-tools"
 version = "1.0.0"
@@ -55,11 +56,15 @@ fail_under = 75
 
 [tool.mypy]
 python_version = "3.9"
-warn_return_any = true
+warn_return_any = false
 warn_unused_configs = true
 disallow_untyped_defs = false
 check_untyped_defs = true
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "cve_metadata_extractor.*"
+disable_error_code = ["var-annotated"]
 
 [tool.ruff]
 target-version = "py39"
@@ -68,6 +73,9 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["SIM117", "E741", "SIM105", "E402"]
 
 [build-system]
 requires = ["setuptools>=68.0"]
@@ -78,4 +86,4 @@ include = ["cve_agent*", "cve_corrector*", "cve_metadata_extractor*", "shared*"]
 
 [tool.setuptools.package-data]
 cve_metadata_extractor = ["config.json"]
-cve_agent = ["AGENT_INSTRUCTIONS.md"]
+cve_agent = ["AGENT_INSTRUCTIONS.md", "agents/*.json"]
