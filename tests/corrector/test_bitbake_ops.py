@@ -1,0 +1,166 @@
+# Copyright (C) 2026 Ericsson AB
+# SPDX-License-Identifier: MIT
+"""Tests for cve_corrector.bitbake_ops — file-based operations."""
+
+from cve_corrector.bitbake_ops import find_mirror_repo
+
+
+def test_find_mirror_repo_bare(tmp_path):
+    (tmp_path / "libarchive.git").mkdir()
+    assert find_mirror_repo(tmp_path, "libarchive") == tmp_path / "libarchive.git"
+
+
+def test_find_mirror_repo_plain(tmp_path):
+    (tmp_path / "libarchive").mkdir()
+    assert find_mirror_repo(tmp_path, "libarchive") == tmp_path / "libarchive"
+
+
+def test_find_mirror_repo_missing(tmp_path):
+    assert find_mirror_repo(tmp_path, "nonexistent") is None
+
+
+def test_update_recipe_patch(tmp_path):
+    from cve_corrector.recipe_ops import update_recipe_patch
+    recipe_dir = tmp_path / "recipes-foo" / "foo"
+    recipe_dir.mkdir(parents=True)
+    bb = recipe_dir / "foo_1.0.bb"
+    bb.write_text('SRC_URI = "file://old-name.patch"\n')
+    update_recipe_patch("foo", "new-name.patch", "old-name.patch", tmp_path)
+    assert "new-name.patch" in bb.read_text()
+    assert "old-name.patch" not in bb.read_text()
+
+
+def test_update_recipe_patch_no_match(tmp_path, capsys):
+    from unittest.mock import MagicMock
+    from unittest.mock import patch as mock_patch
+
+    from cve_corrector.recipe_ops import update_recipe_patch
+    recipe_dir = tmp_path / "recipes-foo" / "foo"
+    recipe_dir.mkdir(parents=True)
+    bb = recipe_dir / "foo_1.0.bb"
+    bb.write_text('SRC_URI = "file://other.patch"\n')
+    with mock_patch("cve_corrector.recipe_ops.run_cmd_capture",
+                    return_value=MagicMock(stdout="")):
+        update_recipe_patch("foo", "new.patch", "missing.patch", meta_layer=tmp_path)
+    assert "Warning" in capsys.readouterr().out
+
+def test_snapshot_src_uri(tmp_path):
+    """snapshot_src_uri returns file:// basenames from the recipe."""
+    from cve_corrector.recipe_ops import snapshot_src_uri
+    recipe_dir = tmp_path / "recipes-core" / "busybox"
+    recipe_dir.mkdir(parents=True)
+    recipe = recipe_dir / "busybox_1.36.1.bb"
+    recipe.write_text(
+        'SRC_URI = "file://defconfig \\\n'
+        '           file://mdev.cfg \\\n'
+        '           file://patch.patch \\\n'
+        '           "\n'
+    )
+    entries = snapshot_src_uri(tmp_path, "busybox")
+    assert entries == {"defconfig", "mdev.cfg", "patch.patch"}
+
+
+def test_remove_bbappend_leaks(tmp_path):
+    """remove_bbappend_leaks strips non-patch entries added by devtool."""
+    from cve_corrector.recipe_ops import remove_bbappend_leaks
+    recipe_dir = tmp_path / "recipes-core" / "busybox"
+    recipe_dir.mkdir(parents=True)
+    recipe = recipe_dir / "busybox_1.36.1.bb"
+    recipe.write_text(
+        'SRC_URI = "file://defconfig \\\n'
+        '           file://mdev.cfg \\\n'
+        '           file://lspci.cfg \\\n'
+        '           file://nsenter.cfg \\\n'
+        '           file://new-fix.patch \\\n'
+        '           "\n'
+    )
+    original = {"defconfig", "mdev.cfg"}
+    remove_bbappend_leaks(tmp_path, "busybox", original)
+    text = recipe.read_text()
+    assert "defconfig" in text
+    assert "mdev.cfg" in text
+    assert "new-fix.patch" in text  # new patch kept
+    assert "lspci.cfg" not in text  # bbappend leak removed
+    assert "nsenter.cfg" not in text  # bbappend leak removed
+
+
+def test_remove_bbappend_leaks_no_leaks(tmp_path):
+    """remove_bbappend_leaks is a no-op when nothing leaked."""
+    from cve_corrector.recipe_ops import remove_bbappend_leaks
+    recipe_dir = tmp_path / "recipes-core" / "busybox"
+    recipe_dir.mkdir(parents=True)
+    recipe = recipe_dir / "busybox_1.36.1.bb"
+    original_text = 'SRC_URI = "file://defconfig \\\n           file://fix.patch \\\n           "\n'
+    recipe.write_text(original_text)
+    remove_bbappend_leaks(tmp_path, "busybox", {"defconfig"})
+    assert recipe.read_text() == original_text
+
+
+def test_append_src_uri_entries_not_confused_by_sha256sum(tmp_path):
+    """_append_src_uri_entries inserts before closing quote, not near SRC_URI[sha256sum]."""
+    from cve_corrector.recipe_ops import _append_src_uri_entries
+    recipe_dir = tmp_path / "recipes-extended" / "libarchive"
+    recipe_dir.mkdir(parents=True)
+    recipe = recipe_dir / "libarchive_3.7.9.bb"
+    recipe.write_text(
+        'SRC_URI = "http://libarchive.org/downloads/libarchive-${PV}.tar.gz \\\n'
+        '           file://configurehack.patch \\\n'
+        '           "\n'
+        'UPSTREAM_CHECK_URI = "http://libarchive.org/"\n'
+        '\n'
+        'SRC_URI[sha256sum] = "aa90732c5a6bdda52fda2ad468ac98d75be981c15dde263d7b5cf6af66fd009f"\n'
+        '\n'
+        'inherit autotools update-alternatives pkgconfig\n'
+    )
+    _append_src_uri_entries(recipe, ["CVE-2026-4424-1.patch", "CVE-2026-4424-2.patch"])
+    content = recipe.read_text()
+    # Patches must be inside SRC_URI block (before the closing quote)
+    lines = content.splitlines()
+    closing_quote_idx = next(i for i, l in enumerate(lines) if l.strip() == '"')
+    sha256_idx = next(i for i, l in enumerate(lines) if 'sha256sum' in l)
+    patch_indices = [i for i, l in enumerate(lines) if 'CVE-2026-4424' in l]
+    for idx in patch_indices:
+        assert idx < closing_quote_idx, f"Patch at line {idx} should be before closing quote at {closing_quote_idx}"
+        assert idx < sha256_idx, f"Patch at line {idx} should be before sha256sum at {sha256_idx}"
+
+
+def test_append_src_uri_entries_override_style(tmp_path):
+    """_append_src_uri_entries handles SRC_URI:append override syntax."""
+    from cve_corrector.recipe_ops import _append_src_uri_entries
+    recipe_dir = tmp_path / "recipes-core" / "openssl"
+    recipe_dir.mkdir(parents=True)
+    recipe = recipe_dir / "openssl_3.1.4.bb"
+    recipe.write_text(
+        'SUMMARY = "Secure Sockets Layer"\n'
+        'SRC_URI:append:class-target = " \\\n'
+        '    file://existing.patch \\\n'
+        '    "\n'
+    )
+    _append_src_uri_entries(recipe, ["CVE-2026-1234.patch"])
+    content = recipe.read_text()
+    assert "CVE-2026-1234.patch" in content
+    assert content.index("CVE-2026-1234.patch") < content.rindex('"')
+
+
+def test_find_recipe_file_exact_match(tmp_path):
+    """_find_recipe_file does not match busybox-utils when looking for busybox."""
+    from cve_corrector.recipe_ops import _find_recipe_file
+    recipe_dir = tmp_path / "recipes-core" / "busybox"
+    recipe_dir.mkdir(parents=True)
+    (recipe_dir / "busybox_1.36.1.bb").write_text('SUMMARY = "busybox"\n')
+    (recipe_dir / "busybox-utils_1.36.1.bb").write_text('SUMMARY = "utils"\n')
+    result = _find_recipe_file(tmp_path, "busybox")
+    assert result is not None
+    assert result.name == "busybox_1.36.1.bb"
+
+
+def test_find_recipe_file_prefers_bbappend(tmp_path):
+    """_find_recipe_file prefers .bbappend over .bb."""
+    from cve_corrector.recipe_ops import _find_recipe_file
+    recipe_dir = tmp_path / "recipes-core" / "openssl"
+    recipe_dir.mkdir(parents=True)
+    (recipe_dir / "openssl_3.1.4.bb").write_text('SUMMARY = "ssl"\n')
+    (recipe_dir / "openssl_3.1.4.bbappend").write_text('# append\n')
+    result = _find_recipe_file(tmp_path, "openssl")
+    assert result is not None
+    assert result.suffix == ".bbappend"

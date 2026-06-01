@@ -17,6 +17,7 @@ venv/
 .coverage
 htmlcov/
 coverage.xml
+tests/integration/test-results/
 
 # IDE
 .idea/
@@ -26,6 +27,7 @@ coverage.xml
 
 # Extra plugins (symlinked from private repo)
 extra/*.py
+extra/test-cve-metadata.json
 !extra/README.md
 
 # Runtime data
