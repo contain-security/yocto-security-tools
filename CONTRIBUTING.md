@@ -155,7 +155,7 @@ Basic development tools (git, gcc, make, editors) should not be listed.
 ```
 component: Add the ability to ...
 
-Assisted-by: Kiro:claude-sonnet-4-20250514
+Assisted-by: Kiro:claude-opus-4.6
 
 Signed-off-by: Your Name <your.name@domain>
 ```
