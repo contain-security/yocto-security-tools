@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.1.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-requests]
+        args: [--ignore-missing-imports]
+        pass_filenames: false
+        entry: mypy cve_agent cve_corrector cve_metadata_extractor shared
