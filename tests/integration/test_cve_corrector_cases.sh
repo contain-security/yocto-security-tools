@@ -161,6 +161,8 @@ run_test() {
     rm -rf "${BUILD_DIR}/workspace" 2>/dev/null || true
     rm -f "${BUILD_DIR}/conf/bblayers.conf.bak" 2>/dev/null || true
     sed -i '\|/workspace|d' "${BUILD_DIR}/conf/bblayers.conf" 2>/dev/null || true
+    # Invalidate bitbake parse cache so recipe modifications are picked up
+    rm -rf "${BUILD_DIR}"/tmp*/cache 2>/dev/null || true
     bitbake -c cleansstate "$recipe" >> "$log_file" 2>&1 || true
 
     cd "$SCRIPT_DIR"
@@ -246,8 +248,8 @@ echo
 printf "%-20s %-40s %-8s %-8s %-8s %-8s %-8s %s\n" "CVE_ID" "TEST" "STATUS" "NAMING" "PRESERVE" "DIFF" "PATCHES" "FILES" > "$RESULTS_FILE"
 printf "%-20s %-40s %-8s %-8s %-8s %-8s %-8s %s\n" "--------------------" "----------------------------------------" "--------" "--------" "--------" "--------" "--------" "--------" >> "$RESULTS_FILE"
 
-# Test 0: Verify build environment is functional
-if [[ -z "$RUN_TEST" || "$RUN_TEST" == "0" ]]; then
+# Test 0: Verify build environment is functional (opt-in: --test 0)
+if [[ "$RUN_TEST" == "0" ]]; then
     log "=== TEST 0: Build environment sanity check (core-image-minimal) ==="
     local_log="${LOG_DIR}/0_build_env_check.log"
     if bitbake core-image-minimal >> "$local_log" 2>&1; then

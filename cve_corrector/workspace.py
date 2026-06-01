@@ -150,7 +150,9 @@ def setup_upstream_remote(workspace_path: Path, mirror_path: Optional[Path],
 
     logger.info("Fetching upstream references")
     if run_cmd(['git', 'fetch', 'upstream', '--tags', '--progress'], cwd=workspace_path) != 0:
-        raise GitError("Git operation failed")
+        logger.warning("Failed to fetch upstream — continuing without upstream history")
+        run_cmd(['git', 'remote', 'remove', 'upstream'], cwd=workspace_path)
+        return None
 
     return mirror_name
 
