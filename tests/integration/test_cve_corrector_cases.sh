@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Ericsson AB
 # SPDX-License-Identifier: MIT
 # Test cases for cve_corrector covering scenarios:
+#   0. Build environment sanity check (core-image-minimal)
 #   1. Multiple patches with removed subsequent (CVE-2024-12086 / rsync)
 #   2. Single patch with build+ptest (CVE-2025-5915 / libarchive)
 #   3. Multiple patches / series with build+ptest (CVE-2026-25210 / expat)
@@ -156,6 +157,12 @@ run_test() {
     # Capture patches after setup (baseline for cve_corrector)
     get_recipe_patches "meta" "$recipe" > "$patches_before"
 
+    # Clean build workspace to avoid pre-existing build failures from prior tests
+    rm -rf "${BUILD_DIR}/workspace" 2>/dev/null || true
+    rm -f "${BUILD_DIR}/conf/bblayers.conf.bak" 2>/dev/null || true
+    sed -i '\|/workspace|d' "${BUILD_DIR}/conf/bblayers.conf" 2>/dev/null || true
+    bitbake -c cleansstate "$recipe" >> "$log_file" 2>&1 || true
+
     cd "$SCRIPT_DIR"
 
     log "  [$TEST_NUM] Running $runner..."
@@ -230,12 +237,32 @@ run_test() {
 TEST_NUM=0
 log "Starting cve_corrector test cases"
 log "OE_DIR:     $OE_DIR"
+log "BUILD_DIR:  $BUILD_DIR"
+log "BBPATH:     ${BBPATH:-(not set)}"
 log "MIRROR_DIR: $MIRROR_DIR"
 log "Results:    $LOG_DIR"
 echo
 
 printf "%-20s %-40s %-8s %-8s %-8s %-8s %-8s %s\n" "CVE_ID" "TEST" "STATUS" "NAMING" "PRESERVE" "DIFF" "PATCHES" "FILES" > "$RESULTS_FILE"
 printf "%-20s %-40s %-8s %-8s %-8s %-8s %-8s %s\n" "--------------------" "----------------------------------------" "--------" "--------" "--------" "--------" "--------" "--------" >> "$RESULTS_FILE"
+
+# Test 0: Verify build environment is functional
+if [[ -z "$RUN_TEST" || "$RUN_TEST" == "0" ]]; then
+    log "=== TEST 0: Build environment sanity check (core-image-minimal) ==="
+    local_log="${LOG_DIR}/0_build_env_check.log"
+    if bitbake core-image-minimal >> "$local_log" 2>&1; then
+        log "  [0] Build environment OK"
+        printf "%-20s %-40s %-8s %-8s %-8s %-8s %-8s %s\n" "-" "Build env check (core-image-minimal)" "PASS" "-" "-" "-" "-" "-" >> "$RESULTS_FILE"
+    else
+        log "  [0] FATAL: core-image-minimal build failed — environment broken"
+        printf "%-20s %-40s %-8s %-8s %-8s %-8s %-8s %s\n" "-" "Build env check (core-image-minimal)" "FAIL" "-" "-" "-" "-" "-" >> "$RESULTS_FILE"
+        log "  [0] See: $local_log"
+        log "  [0] Fix the build environment before running tests."
+        reset_oe_tree
+        cat "$RESULTS_FILE"
+        exit 1
+    fi
+fi
 
 # Test 1: Multiple patches with removed subsequent (rsync series)
 run_test "Multi-patch + removed subsequent" "CVE-2024-12086" "0" "false" "$CVE_METADATA" "corrector" "--skip-build --skip-ptest"
