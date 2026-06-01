@@ -1,0 +1,13 @@
+{
+  "cvelistv5_url": "https://github.com/CVEProject/cvelistV5.git",
+  "cvelistv5_branch": "main",
+  "debian_release": "bookworm",
+  "debian_tracker_url": "https://salsa.debian.org/security-tracker-team/security-tracker.git",
+  "debian_tracker_branch": "master",
+  "nvd_url": "https://github.com/fkie-cad/nvd-json-data-feeds.git",
+  "nvd_branch": "main",
+  "oe_branches": ["scarthgap"],
+  "osv_api": "https://api.osv.dev",
+  "ubuntu_api": "https://ubuntu.com",
+  "snapshot_api": "https://snapshot.debian.org"
+}
