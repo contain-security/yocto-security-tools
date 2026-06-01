@@ -9,7 +9,8 @@ import requests
 
 from .config import load_config
 from .sources import SOURCE_REGISTRY, CveSource
-from .utils import URL_RE, find_hash, process_pr_url, tag_results
+from .utils import URL_RE, find_hash, process_pr_url, \
+    process_gitlab_issue_url, tag_results, _GITLAB_ISSUE_RE
 
 _cfg = load_config()
 UBUNTU_API = _cfg.get('ubuntu_api', 'https://ubuntu.com')
@@ -77,6 +78,8 @@ def extract_from_ubuntu_response(ubuntu_data):
             patch_links.append({'url': url, 'tags': 'patch'})
             if '/pull/' in url:
                 process_pr_url(url, series)
+            elif _GITLAB_ISSUE_RE.match(url):
+                process_gitlab_issue_url(url, series)
             h = find_hash(url)
             if h and not any(e['hash'] == h for e in hashes):
                 hashes.append({'hash': h, 'url': url})
@@ -88,6 +91,8 @@ def extract_from_ubuntu_response(ubuntu_data):
         references.append(url)
         if '/pull/' in url:
             process_pr_url(url, series)
+        elif _GITLAB_ISSUE_RE.match(url):
+            process_gitlab_issue_url(url, series)
         h = find_hash(url)
         if h and not any(e['hash'] == h for e in hashes):
             hashes.append({'hash': h, 'url': url})

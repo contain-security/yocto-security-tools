@@ -18,7 +18,8 @@ import requests
 from .config import load_config
 from .mirrors import ensure_data_repo
 from .sources import SOURCE_REGISTRY, CveSource
-from .utils import CVE_ID_RE, URL_RE, find_hash, process_pr_url
+from .utils import CVE_ID_RE, URL_RE, find_hash, process_pr_url, \
+    process_gitlab_issue_url, _GITLAB_ISSUE_RE
 
 _cfg = load_config()
 SNAPSHOT_API = _cfg['snapshot_api']
@@ -394,6 +395,8 @@ def extract_from_debian_tracker(cve_id, debian_data, stats):
             references.append(url)
             if '/pull/' in url:
                 process_pr_url(url, series)
+            elif _GITLAB_ISSUE_RE.match(url):
+                process_gitlab_issue_url(url, series)
             h = find_hash(url)
             if h:
                 hashes.append({'hash': h, 'url': url, 'source': 'debian',

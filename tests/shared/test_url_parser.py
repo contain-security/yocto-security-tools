@@ -5,7 +5,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from shared.url_parser import extract_commit_hash, fetch_github_pr_commits, parse_fix_url
+from shared.url_parser import (
+    extract_commit_hash,
+    fetch_github_pr_commits,
+    fetch_gitlab_issue_commits,
+    parse_fix_url,
+)
 
 
 class TestExtractCommitHash:
@@ -90,3 +95,64 @@ class TestParseFixUrl:
     def test_invalid_url_raises(self):
         with pytest.raises(ValueError, match="Could not extract commit hash"):
             parse_fix_url("https://example.com/no-hash-here")
+
+
+class TestFetchGitlabIssueCommits:
+    @patch('requests.get')
+    def test_success(self, mock_get):
+        closed_by_resp = Mock(
+            status_code=200,
+            json=lambda: [{'iid': 101}])
+        closed_by_resp.raise_for_status = Mock()
+
+        commits_resp = Mock(
+            status_code=200,
+            json=lambda: [{'id': 'sha1'}, {'id': 'sha2'}])
+        commits_resp.raise_for_status = Mock()
+
+        mock_get.side_effect = [closed_by_resp, commits_resp]
+
+        result = fetch_gitlab_issue_commits(
+            "https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/3839")
+        assert result == ['sha1', 'sha2']
+
+    def test_invalid_url(self):
+        result = fetch_gitlab_issue_commits("https://github.com/owner/repo/issues/42")
+        assert result == []
+
+    @patch('requests.get')
+    def test_api_failure(self, mock_get):
+        from requests.exceptions import Timeout
+        mock_get.side_effect = Timeout("timed out")
+
+        result = fetch_gitlab_issue_commits(
+            "https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/3839")
+        assert result == []
+
+    @patch('requests.get')
+    @patch.dict('os.environ', {'GITLAB_TOKEN': 'mytoken'})
+    def test_uses_token(self, mock_get):
+        closed_by_resp = Mock(
+            status_code=200, json=lambda: [])
+        closed_by_resp.raise_for_status = Mock()
+        mock_get.return_value = closed_by_resp
+
+        fetch_gitlab_issue_commits(
+            "https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/1")
+
+        headers = mock_get.call_args[1].get('headers', {})
+        assert headers.get('PRIVATE-TOKEN') == 'mytoken'
+
+    @patch('requests.get')
+    @patch.dict('os.environ', {}, clear=True)
+    def test_no_token(self, mock_get):
+        closed_by_resp = Mock(
+            status_code=200, json=lambda: [])
+        closed_by_resp.raise_for_status = Mock()
+        mock_get.return_value = closed_by_resp
+
+        fetch_gitlab_issue_commits(
+            "https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/1")
+
+        headers = mock_get.call_args[1].get('headers', {})
+        assert 'PRIVATE-TOKEN' not in headers

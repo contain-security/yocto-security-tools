@@ -9,7 +9,8 @@ import requests
 
 from .config import load_config
 from .sources import SOURCE_REGISTRY, CveSource
-from .utils import find_hash, process_pr_url, tag_results
+from .utils import find_hash, process_pr_url, process_gitlab_issue_url, \
+    tag_results, _GITLAB_ISSUE_RE
 
 _cfg = load_config()
 OSV_API = _cfg.get('osv_api', 'https://api.osv.dev')
@@ -116,6 +117,8 @@ def extract_from_osv_response(osv_data):
         references.append(url)
         if '/pull/' in url:
             process_pr_url(url, series)
+        elif _GITLAB_ISSUE_RE.match(url):
+            process_gitlab_issue_url(url, series)
         if ref_type in ('FIX', 'PATCH'):
             patch_links.append({'url': url, 'tags': ref_type.lower()})
             h = find_hash(url)

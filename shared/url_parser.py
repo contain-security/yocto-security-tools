@@ -96,6 +96,71 @@ def fetch_github_pr_commits(pr_url: str,
         return []
 
 
+_GITLAB_ISSUE_RE = re.compile(
+    r'https://(gitlab\.[^/]+)/(.+?)/-/issues/(\d+)')
+
+
+def fetch_gitlab_issue_commits(issue_url: str) -> list[str]:
+    """Fetch commit SHAs from merge requests linked to a GitLab issue.
+
+    Uses the public GitLab API (unauthenticated). If GITLAB_TOKEN is set,
+    it is sent for private project access.
+
+    Args:
+        issue_url: Full GitLab issue URL.
+
+    Returns:
+        Ordered list of commit SHA strings. Empty list on failure.
+    """
+    import os  # pylint: disable=import-outside-toplevel
+
+    import requests  # pylint: disable=import-outside-toplevel
+
+    match = _GITLAB_ISSUE_RE.match(issue_url.split('#')[0])
+    if not match:
+        return []
+
+    host, project_path, issue_iid = match.groups()
+    encoded_project = project_path.replace('/', '%2F')
+    base = f'https://{host}/api/v4/projects/{encoded_project}'
+
+    headers: dict[str, str] = {}
+    token = os.getenv('GITLAB_TOKEN')
+    if token:
+        headers['PRIVATE-TOKEN'] = token
+
+    print(f"  Fetching GitLab issue commits from {issue_url}...")
+    try:
+        resp = requests.get(
+            f'{base}/issues/{issue_iid}/closed_by',
+            headers=headers, timeout=10)
+        resp.raise_for_status()
+        mrs = resp.json()
+    except requests.RequestException as e:
+        print(f"  Failed to fetch GitLab issue MRs: {e}")
+        return []
+
+    commits: list[str] = []
+    for mr in mrs:
+        mr_iid = mr.get('iid')
+        if not mr_iid:
+            continue
+        try:
+            resp = requests.get(
+                f'{base}/merge_requests/{mr_iid}/commits',
+                headers=headers, timeout=10)
+            resp.raise_for_status()
+            for c in resp.json():
+                sha = c.get('id', '')
+                if sha and sha not in commits:
+                    commits.append(sha)
+        except requests.RequestException:
+            pass
+
+    print(f"  Found {len(commits)} commits from GitLab issue")
+    return commits
+
+
 def parse_fix_url(url: str) -> dict:
     """Parse a fix URL into hashes, hash_details, and series.
 

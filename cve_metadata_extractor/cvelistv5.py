@@ -6,7 +6,8 @@ import logging
 
 from .mirrors import ensure_data_repo
 from .sources import SOURCE_REGISTRY, CveSource
-from .utils import find_cve_json_file, find_hash, process_pr_url, tag_results
+from .utils import find_cve_json_file, find_hash, process_pr_url, \
+    process_gitlab_issue_url, tag_results, _GITLAB_ISSUE_RE
 
 
 def _process_references(refs, patch_links, hashes, series, references):
@@ -16,6 +17,8 @@ def _process_references(refs, patch_links, hashes, series, references):
         references.append(url)
         if '/pull/' in url:
             process_pr_url(url, series)
+        elif _GITLAB_ISSUE_RE.match(url):
+            process_gitlab_issue_url(url, series)
         if 'tags' in ref and 'patch' in ref['tags']:
             patch_links.append({'url': url, 'tags': ', '.join(ref['tags'])})
         h = find_hash(url)

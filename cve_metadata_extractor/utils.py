@@ -8,8 +8,10 @@ import re
 from shared.url_parser import (  # noqa: F401
     HASH_RE,
     IGNORED_URL_PATTERNS,
+    _GITLAB_ISSUE_RE,
     extract_commit_hash,
     fetch_github_pr_commits,
+    fetch_gitlab_issue_commits,
 )
 
 from .config import load_config
@@ -95,6 +97,23 @@ def process_pr_url(url, series):
     pr_commits = extract_github_pr_commits(url)
     if pr_commits:
         series.append({'pull_url': url.split('#')[0], 'commits': pr_commits})
+
+
+def process_gitlab_issue_url(url, series):
+    '''Process a GitLab issue URL and add linked MR commits to series.'''
+    clean_url = url.split('#')[0]
+
+    if clean_url in PR_CACHE:
+        print(f"  Using cached GitLab issue commits from {clean_url}")
+        commits = PR_CACHE[clean_url]
+    else:
+        commits = fetch_gitlab_issue_commits(url)
+        if commits:
+            PR_CACHE[clean_url] = commits
+            save_pr_cache()
+
+    if commits:
+        series.append({'pull_url': clean_url, 'commits': commits})
 
 
 def extract_github_pr_commits(pr_url):
