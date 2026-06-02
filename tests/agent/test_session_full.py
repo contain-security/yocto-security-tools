@@ -122,7 +122,8 @@ class TestBuildDeviationSection:
         lines = _build_deviation_section("a.c", "+new", "-old", "adapted")
         text = '\n'.join(lines)
         assert "a.c" in text
-        assert "Upstream diff" in text
+        assert "Differences from upstream" in text
+        assert "Full upstream diff" in text
         assert "adapted" in text
 
     def test_no_backport_note(self):

@@ -5,6 +5,7 @@
 Spawns AI sessions with context files, wraps them with file-scope
 enforcement (pre-commit hook + post-session revert).
 """
+import difflib
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -168,17 +169,31 @@ def _get_backport_note(workspace_path: Path) -> str:
 
 def _build_deviation_section(filepath: str, agent_diff: str,
                               upstream_diff: str, backport_note: str) -> list[str]:
-    """Build log lines for a single file that deviates from upstream."""
+    """Build log lines for a single file that deviates from upstream.
+
+    Shows the upstream diff once, then only the lines that differ between
+    the upstream and agent versions (unified-style diff of the two patches).
+    """
+    upstream_hunks = _hunk_lines(upstream_diff)
+    agent_hunks = _hunk_lines(agent_diff)
+
+    # Build a compact view of what changed between upstream and agent
+    delta = list(difflib.unified_diff(
+        upstream_hunks, agent_hunks,
+        fromfile='upstream', tofile='agent', lineterm=''))
+
     lines = [
         f'File: {filepath}',
         '-' * 72,
-        '  Upstream diff:',
-        *_format_diff_lines(upstream_diff),
-        '',
-        '  Agent applied diff (deviates from upstream):',
-        *_format_diff_lines(agent_diff),
-        '',
     ]
+    if delta:
+        lines.append('  Differences from upstream patch:')
+        for d in delta:
+            lines.append(f'  | {d}')
+    lines.append('')
+    lines.append('  Full upstream diff (for reference):')
+    lines.extend(_format_diff_lines(upstream_diff))
+    lines.append('')
     if backport_note:
         lines.append(f'  Resolution rationale: {backport_note}')
     lines.append('')
