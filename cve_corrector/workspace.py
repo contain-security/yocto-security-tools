@@ -83,7 +83,8 @@ def setup_upstream_remote(workspace_path: Path, mirror_path: Optional[Path],
     as this could indicate a supply-chain mismatch.
 
     Returns:
-        Mirror directory name when a local mirror is used, or None.
+        Mirror directory name when a local mirror is used, or upstream repo
+        basename when fetched from a remote URL. None if setup failed.
     """
     mirror_name = None
     if not mirror_path and mirror_dir:
@@ -154,7 +155,10 @@ def setup_upstream_remote(workspace_path: Path, mirror_path: Optional[Path],
         run_cmd(['git', 'remote', 'remove', 'upstream'], cwd=workspace_path)
         return None
 
-    return mirror_name
+    # Return mirror_name if available, else derive from upstream URL
+    if mirror_name:
+        return mirror_name
+    return upstream_url.rstrip('/').rsplit('/', 1)[-1].removesuffix('.git')
 
 
 def _urls_differ(url_a: str, url_b: str) -> bool:
