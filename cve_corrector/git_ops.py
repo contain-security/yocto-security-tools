@@ -211,11 +211,17 @@ def deduce_repo_from_patches(patches: list[str]) -> Optional[str]:
             from urllib.parse import urlparse
             parsed = urlparse(url.split(';')[0].split('?')[0])
             repo_name = url.split('?p=')[1].split(';', maxsplit=1)[0]
-            if 'sourceware.org' in url:
+            host = parsed.hostname or ''
+            if host == 'sourceware.org' or host.endswith('.sourceware.org'):
                 new_url = f'https://sourceware.org/git/{repo_name}'
             else:
                 new_url = f'{parsed.scheme}://{parsed.netloc}/{repo_name}'
         elif 'savannah.gnu.org' in url:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname or ''
+            if not (host == 'git.savannah.gnu.org' or host.endswith('.savannah.gnu.org')):
+                continue
             if '/cgit/' in url:
                 repo_name = url.split('/cgit/')[1].split('/')[0]
             else:

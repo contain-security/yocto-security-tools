@@ -30,7 +30,7 @@ class TestGetGitUserInfo:
         mock_run.return_value = MagicMock(returncode=1, stdout="")
         name, email = get_git_user_info()
         assert name == "Unknown"
-        assert "example.com" in email
+        assert "example.com" in email  # noqa: CodeQL[py/incomplete-url-substring-sanitization]
 
 
 class TestDetectMonorepoSubproject:
