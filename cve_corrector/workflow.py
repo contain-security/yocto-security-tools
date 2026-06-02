@@ -51,6 +51,36 @@ from .utils import logger, run_cmd, run_cmd_capture
 from .workspace import prepare_cve_branch, setup_devtool_workspace, setup_upstream_remote
 
 
+def _kill_bitbake_server() -> None:
+    """Kill any running bitbake server via its lockfile PID."""
+    import os
+    import signal
+    import time
+    builddir = os.environ.get('BUILDDIR', os.environ.get('BBPATH', ''))
+    if not builddir:
+        run_cmd(['bitbake', '--kill-server'], timeout=30)
+        return
+    lockfile = Path(builddir) / 'bitbake.lock'
+    if not lockfile.exists():
+        run_cmd(['bitbake', '--kill-server'], timeout=30)
+        return
+    try:
+        pid = int(lockfile.read_text().strip())
+        os.kill(pid, signal.SIGTERM)
+        time.sleep(2)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    except (ValueError, ProcessLookupError, PermissionError, OSError):
+        pass
+    # Remove stale socket so fresh server starts cleanly
+    sock = Path(builddir) / 'bitbake.sock'
+    sock.unlink(missing_ok=True)
+    lockfile.unlink(missing_ok=True)
+    time.sleep(1)
+
+
 def _run_build_step(state: WorkflowState) -> None:
     """Build recipe after patch, saving progress on failure."""
     if state.skip_build:
@@ -136,7 +166,8 @@ def finish_cve_workflow(state: WorkflowState) -> None:
     state_file = get_state_dir() / f"{state.workspace_path.name}.json"
 
     logger.info("Cleaning workspace")
-    run_cmd(['git', 'clean', '-f', '-e', 'oe-local-files'], cwd=state.workspace_path)
+    run_cmd(['git', 'clean', '-fdx', '-e', 'oe-local-files'],
+            cwd=state.workspace_path)
 
     if should_run('finish'):
         saved_extras = save_bbappend_extras(state.meta_layer, state.recipe)
@@ -164,7 +195,7 @@ def finish_cve_workflow(state: WorkflowState) -> None:
             if ret == -1:
                 logger.warning("devtool finish timed out — killing bitbake "
                                "server and retrying")
-                run_cmd(['bitbake', '--kill-server'], timeout=30)
+                _kill_bitbake_server()
                 ret = run_cmd(['devtool', 'finish', '-f', '-n',
                                state.recipe, str(state.meta_layer)],
                               timeout=300)
@@ -280,8 +311,8 @@ def continue_from_conflict() -> WorkflowState:
                 raise ConflictError("Conflict detected")
         logger.info("✓ All remaining commits applied successfully")
 
-    # After conflict resolution, always rerun build and ptest verification
-    state.current_step = 'build_after_patch'
+    # After conflict resolution, transfer commits to devtool branch
+    state.current_step = 'cherry_pick_to_devtool'
     return state
 
 

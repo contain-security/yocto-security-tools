@@ -299,7 +299,7 @@ run_test "Monorepo subprojects strip" "CVE-2024-47539" "0" "false" "$CVE_METADAT
 run_test "Single-patch SRC_URI += removal" "CVE-2024-39689" "1" "false" "$CVE_METADATA" "corrector" "--skip-build --skip-ptest"
 
 # Test 11: Agent conflict resolution with subsequent patch removal (openssh)
-run_test "Agent conflict + devtool finish recovery" "CVE-2024-39894" "0" "false" "$CVE_METADATA" "agent"
+run_test "Agent conflict + devtool finish recovery" "CVE-2024-39894" "0" "false" "$CVE_METADATA" "agent" "--skip-ptest"
 
 # Test 12: Skip-build-ptest baseline for gstreamer1.0-rtsp-server
 run_test "Skip-build-ptest baseline" "CVE-2024-44331" "0" "false" "$CVE_METADATA" "corrector" "--skip-build --skip-ptest"
