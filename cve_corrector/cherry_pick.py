@@ -56,7 +56,7 @@ def cherry_pick_to_devtool(state: WorkflowState) -> None:
         logger.info("Monorepo subdir: %s, strip level: %s", subdir, strip_level)
 
         git_clean_workspace(state.workspace_path, remove_ignored=True)
-        run_cmd(['git', 'reset', 'HEAD'], cwd=state.workspace_path)
+        run_cmd(['git', 'checkout', '.'], cwd=state.workspace_path)
         if run_cmd(['git', 'checkout', 'devtool'],
                    cwd=state.workspace_path) != 0:
             save_progress(state, 'cherry_pick_to_devtool')

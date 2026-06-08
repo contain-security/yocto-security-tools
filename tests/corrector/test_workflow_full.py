@@ -142,6 +142,15 @@ class TestGetRepoSubdir:
         assert get_repo_subdir(Path("/ws")) == "expat"
 
     @patch("cve_corrector.git_ops.run_cmd_capture")
+    def test_python_project_not_monorepo(self, mock_run):
+        """Python project with ancillary launcher/ dir should not be detected as monorepo."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="setup.cfg\nsetuptools\nlauncher\nlauncher.c\ndocs\n"
+        )
+        assert get_repo_subdir(Path("/ws")) is None
+
+    @patch("cve_corrector.git_ops.run_cmd_capture")
     def test_git_error(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1)
         assert get_repo_subdir(Path("/ws")) is None
