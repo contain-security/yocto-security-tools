@@ -10,6 +10,7 @@ import pytest
 from cve_corrector.cherry_pick import (
     apply_series,
     apply_single_commits,
+    cherry_pick_to_devtool,
     find_least_conflict_commit,
 )
 from cve_corrector.git_ops import (
@@ -257,6 +258,99 @@ class TestFindLeastConflictCommit:
         best, count = find_least_conflict_commit(Path("/ws"), ["h1", "h2"])
         assert best == "h2"
         assert count == 1
+
+
+class TestCherryPickToDevtool:
+    """Tests for cherry_pick_to_devtool — format-patch base and fallback logic."""
+
+    @patch("cve_corrector.cherry_pick.run_cmd")
+    @patch("cve_corrector.cherry_pick.run_cmd_capture")
+    @patch("cve_corrector.cherry_pick.get_repo_subdir", return_value=None)
+    @patch("cve_corrector.cherry_pick.git_clean_workspace")
+    def test_uses_devtool_as_base_when_ancestor(self, mock_clean, mock_subdir,
+                                                 mock_capture, mock_cmd, tmp_path):
+        """When devtool is ancestor of CVE branch, format-patch uses devtool as base."""
+        state = _state(tmp_path)
+        patch_file = tmp_path / "patch"
+        patch_file.mkdir(parents=True, exist_ok=True)
+
+        mock_capture.side_effect = [
+            MagicMock(returncode=0, stdout="aaa111\n"),  # merge-base devtool CVE
+            MagicMock(returncode=0),  # merge-base --is-ancestor
+            MagicMock(returncode=0, stdout=""),  # format-patch (produces no patches)
+        ]
+        from cve_corrector.state import AlreadyAppliedError
+        with patch("cve_corrector.cherry_pick.handle_empty_cherry_pick"):
+            with pytest.raises(AlreadyAppliedError):
+                cherry_pick_to_devtool(state)
+
+        # Verify format-patch was called with devtool as base
+        fmt_call = mock_capture.call_args_list[2]
+        assert 'devtool..' in fmt_call[0][0][4]
+
+    @patch("cve_corrector.cherry_pick.run_cmd")
+    @patch("cve_corrector.cherry_pick.run_cmd_capture")
+    @patch("cve_corrector.cherry_pick.get_repo_subdir", return_value=None)
+    @patch("cve_corrector.cherry_pick.git_clean_workspace")
+    def test_falls_back_to_cherry_pick(self, mock_clean, mock_subdir,
+                                        mock_capture, mock_cmd, tmp_path):
+        """When git am fails at all levels, falls back to direct cherry-pick."""
+        state = _state(tmp_path)
+        patch_content = "From abc\nSubject: fix\n\ndiff --git a/f.c b/f.c\n--- a/f.c\n+++ b/f.c\n@@ -1 +1 @@\n-old\n+new\n"
+        patch_dir_path = tmp_path / "patches"
+        patch_dir_path.mkdir()
+        (patch_dir_path / "0001-fix.patch").write_text(patch_content)
+
+        mock_cmd.return_value = 0  # git checkout devtool succeeds
+
+        am_fail = MagicMock(returncode=1, stderr="error: patch failed")
+        cherry_pick_ok = MagicMock(returncode=0)
+        mock_capture.side_effect = [
+            MagicMock(returncode=0, stdout="aaa111\n"),  # merge-base
+            MagicMock(returncode=0),  # --is-ancestor
+            MagicMock(returncode=0, stdout="patched"),  # format-patch (has patches)
+            am_fail,  # git am -p1
+            am_fail,  # git am -p1 --3way
+            am_fail,  # git am -p2
+            am_fail,  # git am -p2 --3way
+            am_fail,  # git am -p3
+            am_fail,  # git am -p3 --3way
+            MagicMock(returncode=0, stdout="commit1\n"),  # rev-list for fallback
+            cherry_pick_ok,  # cherry-pick commit1
+        ]
+
+        with patch("tempfile.TemporaryDirectory") as mock_tmpdir:
+            mock_tmpdir.return_value.__enter__ = lambda s: str(patch_dir_path)
+            mock_tmpdir.return_value.__exit__ = MagicMock(return_value=False)
+            cherry_pick_to_devtool(state)
+
+        # Verify cherry-pick was attempted as fallback
+        cherry_pick_calls = [c for c in mock_capture.call_args_list
+                             if 'cherry-pick' in str(c) and 'abort' not in str(c)]
+        assert len(cherry_pick_calls) >= 1
+
+    @patch("cve_corrector.cherry_pick.run_cmd")
+    @patch("cve_corrector.cherry_pick.run_cmd_capture")
+    @patch("cve_corrector.cherry_pick.get_repo_subdir", return_value=None)
+    @patch("cve_corrector.cherry_pick.git_clean_workspace")
+    def test_uses_merge_base_when_not_ancestor(self, mock_clean, mock_subdir,
+                                               mock_capture, mock_cmd, tmp_path):
+        """When devtool is not an ancestor, uses merge-base as format-patch base."""
+        state = _state(tmp_path)
+
+        mock_capture.side_effect = [
+            MagicMock(returncode=0, stdout="bbb222\n"),  # merge-base
+            MagicMock(returncode=1),  # --is-ancestor fails (not ancestor)
+            MagicMock(returncode=0, stdout=""),  # format-patch (no patches)
+        ]
+        from cve_corrector.state import AlreadyAppliedError
+        with patch("cve_corrector.cherry_pick.handle_empty_cherry_pick"):
+            with pytest.raises(AlreadyAppliedError):
+                cherry_pick_to_devtool(state)
+
+        # Verify format-patch used merge-base hash
+        fmt_call = mock_capture.call_args_list[2]
+        assert 'bbb222..' in fmt_call[0][0][4]
 
 
 class TestHandleFailedSeries:

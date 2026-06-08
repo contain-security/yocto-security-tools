@@ -37,12 +37,37 @@ def cherry_pick_to_devtool(state: WorkflowState) -> None:
     subdir = get_repo_subdir(state.workspace_path)
 
     with tempfile.TemporaryDirectory() as patch_dir:
+        # Use devtool as base to only capture CVE-specific commits.
+        # Falls back to original-version if devtool isn't an ancestor.
+        base_ref = 'original-version'
+        merge_base = run_cmd_capture(
+            ['git', 'merge-base', 'devtool', state.cve_id],
+            cwd=state.workspace_path)
+        if merge_base.returncode == 0 and merge_base.stdout.strip():
+            # Check if devtool is an ancestor of CVE branch
+            is_ancestor = run_cmd_capture(
+                ['git', 'merge-base', '--is-ancestor', 'devtool', state.cve_id],
+                cwd=state.workspace_path)
+            if is_ancestor.returncode == 0:
+                base_ref = 'devtool'
+            else:
+                # Use the merge-base to exclude shared history
+                base_ref = merge_base.stdout.strip()
+
         fmt_result = run_cmd_capture(
             ['git', 'format-patch', '-o', patch_dir,
-             f'original-version..{state.cve_id}'],
+             f'{base_ref}..{state.cve_id}'],
             cwd=state.workspace_path)
         if fmt_result.returncode != 0:
-            raise PatchError(f"format-patch failed: {fmt_result.stderr}")
+            # Fall back to original-version if the smarter base fails
+            if base_ref != 'original-version':
+                logger.warning("format-patch from %s failed, falling back to original-version", base_ref)
+                fmt_result = run_cmd_capture(
+                    ['git', 'format-patch', '-o', patch_dir,
+                     f'original-version..{state.cve_id}'],
+                    cwd=state.workspace_path)
+            if fmt_result.returncode != 0:
+                raise PatchError(f"format-patch failed: {fmt_result.stderr}")
         patches = sorted(Path(patch_dir).glob('*.patch'))
         if not patches:
             logger.info("format-patch produced no patches — fix already in tree")
@@ -90,6 +115,26 @@ def cherry_pick_to_devtool(state: WorkflowState) -> None:
             run_cmd(['git', 'am', '--abort'], cwd=state.workspace_path)
 
         if am_result and am_result.returncode != 0:
+            # Fallback: try cherry-picking CVE commits directly onto devtool
+            logger.warning("git am failed at all strip levels, trying direct cherry-pick")
+            cve_commits = run_cmd_capture(
+                ['git', 'rev-list', '--reverse', f'{base_ref}..{state.cve_id}'],
+                cwd=state.workspace_path)
+            if cve_commits.returncode == 0 and cve_commits.stdout.strip():
+                all_picked = True
+                for commit in cve_commits.stdout.strip().splitlines():
+                    ret = run_cmd_capture(
+                        ['git', 'cherry-pick', commit],
+                        cwd=state.workspace_path)
+                    if ret.returncode != 0:
+                        run_cmd(['git', 'cherry-pick', '--abort'],
+                                cwd=state.workspace_path)
+                        all_picked = False
+                        break
+                if all_picked:
+                    logger.info("Applied CVE commits via direct cherry-pick on devtool")
+                    return
+
             logger.error("git am failed at all strip levels: %s", am_result.stderr)
             save_progress(state, 'cherry_pick_to_devtool')
             raise PatchError(f"git am --3way failed: {am_result.stderr}")
