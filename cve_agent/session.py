@@ -42,6 +42,31 @@ def check_resolution_state(workspace_path: Path) -> bool:
     return True
 
 
+_COMMON_PREFIXES = ('src/', 'lib/', 'source/')
+
+
+def _expand_path_variants(allowed: set[str], workspace_path: Path) -> set[str]:
+    """Expand allowed paths to include variants with/without common prefixes.
+
+    If upstream uses src/foo.c but workspace has foo.c (or vice versa),
+    include both so the scope guard doesn't reject the agent's work.
+    """
+    expanded = set(allowed)
+    for filepath in list(allowed):
+        for prefix in _COMMON_PREFIXES:
+            if filepath.startswith(prefix):
+                # Add the unprefixed variant if it exists in the workspace
+                stripped = filepath[len(prefix):]
+                if (workspace_path / stripped).exists():
+                    expanded.add(stripped)
+            else:
+                # Add the prefixed variant if it exists in the workspace
+                prefixed = prefix + filepath
+                if (workspace_path / prefixed).exists():
+                    expanded.add(prefixed)
+    return expanded
+
+
 def guarded_session(context_file: Path, workspace_path: Path,
                     upstream_sha: str, cve_info: dict,
                     model: str = "claude-sonnet-4.6",
@@ -66,7 +91,22 @@ def guarded_session(context_file: Path, workspace_path: Path,
             raw = run_git_capture(['show', sha, '--', f], cwd=workspace_path)
             upstream_diffs[f] = _extract_diff_hunks(raw)
 
+    # Fallback: if SHAs don't exist in repo, derive from workspace diff
+    if not allowed:
+        diff_output = run_git_capture(
+            ['diff', '--name-only', 'original-version..HEAD'], cwd=workspace_path
+        )
+        allowed.update(f for f in diff_output.splitlines() if f)
+        conflict_output = run_git_capture(
+            ['diff', '--name-only', '--diff-filter=U'], cwd=workspace_path
+        )
+        allowed.update(f for f in conflict_output.splitlines() if f)
+
     recipe = workspace_path.name
+
+    # Path-normalize: add variants without/with common prefixes (src/, lib/)
+    # to handle cases where upstream SHA paths differ from workspace layout
+    allowed = _expand_path_variants(allowed, workspace_path)
 
     install_scope_hook(workspace_path, allowed)
     print(f"\n=== Allowed files for this session ({len(allowed)}) ===")

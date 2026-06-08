@@ -9,17 +9,27 @@ A git pre-commit hook enforces this — commits with unauthorized files will be 
 **NEVER do any of these:**
 - `git add .` or `git add -A`
 - `git commit --no-verify` or `git cherry-pick --no-verify`
-- Create, delete, or rename files
-- Modify `.gitignore`, test cases, test data, or test fixtures
+- Cherry-pick additional upstream commits beyond what cve_corrector already applied
+- Create or rename files not in the Allowed Files list
+- Modify `.gitignore` or any file not in the Allowed Files list
 - Run `cve_corrector.py` (the agent handles workflow progression)
 - Read files outside the workspace directory
 - Use the `glob` tool
 
-**Files not in the baseline**: If the upstream commit touches a file that does
-not exist in the stable branch (i.e. `git cat-file -e original-version:<file>`
-fails), **skip that file entirely**. Do not create it, do not attempt to apply
-its changes. Mention it in the commit message as:
-`<file>: omitted (not in branch)`
+**Prerequisite commits**: If the upstream fix depends on a prior commit, do NOT
+cherry-pick it separately. Instead, manually adapt the conflicting code to work
+without the prerequisite — inline the necessary changes into the files already
+being modified. The generated patch must only contain the upstream fix commit's
+changes, adapted for the stable branch.
+
+**Files not in the baseline**: If the upstream commit adds a NEW file that is
+in the Allowed Files list, include it — `git cherry-pick` will stage it
+automatically. If it conflicts or requires infrastructure not present in the
+stable branch, mention it in the commit message as:
+`<file>: omitted (depends on <missing infrastructure>)`
+
+Only omit a file if including it would break the build or if it depends on
+code/headers/build rules that don't exist in the stable branch.
 
 ## Workflow
 
@@ -66,7 +76,7 @@ attempt to fix it. This indicates a pre-existing or environmental issue.
 Otherwise, fix the code and amend the commit.
 
 ### 4. Fix Test Failures (exit code 3)
-Fix the **backported code in the allowed files only**, not the tests.
+Fix the **backported code in the allowed files only**.
 If the fix requires changing a file not in the allowed list, stop and
 flag for human review. Document which tests failed and what code change
 fixed them in the commit message.
@@ -90,6 +100,7 @@ make/cmake/gcc directly.
 
 - **Minimal changes only** — smallest adaptation to make the fix work on stable
 - **Preserve upstream intent** — adapt APIs/signatures, never change fix logic
+- **Match surrounding whitespace** — use the same indentation style (tabs vs spaces, alignment width) as the surrounding code in the stable branch, not the upstream patch
 - **Check dependencies** — look for `Link:` in commit, prerequisite patches
 - **If uncertain, stop** — flag for human review rather than guess
 

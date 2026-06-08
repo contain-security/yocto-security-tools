@@ -241,7 +241,9 @@ class TestFindLeastConflictCommit:
     def test_finds_best(self, mock_bad, mock_capture, mock_cmd):
         mock_capture.side_effect = [
             MagicMock(stdout="a.c\nb.c\n"),  # 2 conflicts for first
+            MagicMock(stdout="a.c\nb.c\n"),  # diff-tree for first (source files)
             MagicMock(stdout="a.c\n"),  # 1 conflict for second
+            MagicMock(stdout="a.c\n"),  # diff-tree for second (source files)
         ]
         best, count = find_least_conflict_commit(Path("/ws"), ["h1", "h2"])
         assert best == "h2"
