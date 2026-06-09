@@ -110,6 +110,21 @@ def _build_header(cve_id: str, recipe: str, exit_code: int,
             ['show', '--name-only', '--format=', sha], cwd=workspace_path
         )
         allowed_files.update(f for f in files.splitlines() if f)
+
+    # Fallback: if SHAs don't exist in repo, derive allowed files from
+    # the workspace diff (what the corrector actually changed/conflicted)
+    if not allowed_files:
+        diff_files = run_git_capture(
+            ['diff', '--name-only', 'original-version..HEAD'],
+            cwd=workspace_path
+        )
+        allowed_files.update(f for f in diff_files.splitlines() if f)
+        # Also include files with unresolved conflicts
+        conflict_files = run_git_capture(
+            ['diff', '--name-only', '--diff-filter=U'], cwd=workspace_path
+        )
+        allowed_files.update(f for f in conflict_files.splitlines() if f)
+
     allowed_list = '\n'.join(sorted(allowed_files))
 
     sha_display = upstream_sha

@@ -56,24 +56,41 @@ def cherry_pick_to_devtool(state: WorkflowState) -> None:
         logger.info("Monorepo subdir: %s, strip level: %s", subdir, strip_level)
 
         git_clean_workspace(state.workspace_path, remove_ignored=True)
+        run_cmd(['git', 'reset', 'HEAD'], cwd=state.workspace_path)
         if run_cmd(['git', 'checkout', 'devtool'],
                    cwd=state.workspace_path) != 0:
             save_progress(state, 'cherry_pick_to_devtool')
             raise GitError("Failed to checkout devtool branch")
 
-        am_cmd = ['git', 'am', f'-p{strip_level}']
-        am_result = run_cmd_capture(
-            am_cmd + [str(p) for p in patches],
-            cwd=state.workspace_path)
-        if am_result.returncode != 0:
-            logger.warning("git am failed, retrying with --3way: %s", am_result.stderr)
+        # Try detected strip level first, then alternate levels
+        strip_levels = [strip_level] + [
+            p for p in (1, 2, 3) if p != strip_level
+        ]
+        am_result = None
+        for p_level in strip_levels:
+            am_cmd = ['git', 'am', f'-p{p_level}']
+            am_result = run_cmd_capture(
+                am_cmd + [str(p) for p in patches],
+                cwd=state.workspace_path)
+            if am_result.returncode == 0:
+                if p_level != strip_level:
+                    logger.info("Strip level %s worked (detected %s)",
+                                p_level, strip_level)
+                break
             run_cmd(['git', 'am', '--abort'], cwd=state.workspace_path)
+            # Try with --3way at this level
             am_result = run_cmd_capture(
                 am_cmd + ['--3way'] + [str(p) for p in patches],
                 cwd=state.workspace_path)
-        if am_result.returncode != 0:
-            logger.error("git am --3way failed: %s", am_result.stderr)
+            if am_result.returncode == 0:
+                if p_level != strip_level:
+                    logger.info("Strip level %s (3way) worked (detected %s)",
+                                p_level, strip_level)
+                break
             run_cmd(['git', 'am', '--abort'], cwd=state.workspace_path)
+
+        if am_result and am_result.returncode != 0:
+            logger.error("git am failed at all strip levels: %s", am_result.stderr)
             save_progress(state, 'cherry_pick_to_devtool')
             raise PatchError(f"git am --3way failed: {am_result.stderr}")
 
@@ -169,23 +186,48 @@ def apply_single_commits(workspace_path: Path, hashes: list[str],
     return False, None
 
 
+_METADATA_ONLY_FILES = frozenset({
+    'VERSION', 'CHANGES', 'NEWS', 'ChangeLog', 'RELEASE',
+    'configure', 'configure.ac', 'meson.build',
+})
+
+
+def _is_metadata_only_commit(workspace_path: Path, commit_hash: str) -> bool:
+    """Check if a commit only touches metadata/version files (not source code)."""
+    result = run_cmd_capture(
+        ['git', 'diff-tree', '--no-commit-id', '--name-only', '-r', commit_hash],
+        cwd=workspace_path)
+    files = set(result.stdout.splitlines())
+    return bool(files) and all(
+        Path(f).name in _METADATA_ONLY_FILES for f in files
+    )
+
+
 def find_least_conflict_commit(workspace_path: Path,
                                hashes: list[str]) -> tuple[Optional[str], float]:
-    """Find commit that produces the fewest merge conflicts."""
-    logger.info("All cherry-picks failed, finding commit with least conflicts")
-    min_conflicts = float('inf')
-    best_hash = None
+    """Find commit that produces the fewest merge conflicts.
 
-    for commit_hash in hashes:
+    Prefers the first hash in the list (usually the actual fix) and
+    skips metadata-only commits (version bumps) unless no better option.
+    """
+    logger.info("All cherry-picks failed, finding commit with least conflicts")
+    candidates = []
+
+    for idx, commit_hash in enumerate(hashes):
         if is_bad_object(workspace_path, commit_hash):
             continue
         run_cmd(['git', 'cherry-pick', commit_hash], cwd=workspace_path)
         result = run_cmd_capture(
             ['git', 'diff', '--name-only', '--diff-filter=U'], cwd=workspace_path)
         conflict_count = len(result.stdout.splitlines())
-        if conflict_count < min_conflicts:
-            min_conflicts = conflict_count
-            best_hash = commit_hash
+        is_metadata = _is_metadata_only_commit(workspace_path, commit_hash)
+        candidates.append((commit_hash, conflict_count, is_metadata, idx))
         run_cmd(['git', 'cherry-pick', '--abort'], cwd=workspace_path)
 
-    return best_hash, min_conflicts
+    if not candidates:
+        return None, float('inf')
+
+    # Sort: non-metadata first, then by conflict count, then by original order
+    candidates.sort(key=lambda c: (c[2], c[1], c[3]))
+    best = candidates[0]
+    return best[0], best[1]

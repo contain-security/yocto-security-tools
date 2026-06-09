@@ -180,7 +180,7 @@ def _cherry_pick_monorepo(workspace_path: Path, commit_hash: str,
     # Strip subproject prefix from diff paths
     patch = fmt.stdout.replace(f'a/{prefix}', 'a/').replace(f'b/{prefix}', 'b/')
     am = subprocess.run(
-        ['git', 'am'], cwd=workspace_path,
+        ['git', 'am', '--whitespace=fix'], cwd=workspace_path,
         input=patch, text=True, check=False,
         capture_output=True)
     if am.returncode == 0:
@@ -189,7 +189,7 @@ def _cherry_pick_monorepo(workspace_path: Path, commit_hash: str,
     run_cmd_capture(['git', 'am', '--abort'], cwd=workspace_path)
     # Try with 3-way merge
     am = subprocess.run(
-        ['git', 'am', '--3way'], cwd=workspace_path,
+        ['git', 'am', '--3way', '--whitespace=fix'], cwd=workspace_path,
         input=patch, text=True, check=False,
         capture_output=True)
     if am.returncode == 0:

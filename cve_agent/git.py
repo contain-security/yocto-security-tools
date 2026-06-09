@@ -176,43 +176,16 @@ def remove_scope_hook(workspace_path: Path) -> None:
 
 def revert_unauthorized_changes(workspace_path: Path,
                                 allowed: set[str]) -> None:
-    """Revert any working-tree or committed changes to unauthorized files.
+    """Revert committed changes to unauthorized files.
 
-    Handles modified files (checkout from HEAD), untracked files (delete),
-    and committed unauthorized files (restore or git rm + amend).
+    Working-tree changes are left alone (they are ephemeral and get
+    cleaned by git_clean_workspace before devtool transfer).  Only
+    committed unauthorized files are removed from the commit.
 
     Args:
         workspace_path: Path to workspace.
         allowed: Set of file paths allowed by the upstream commit.
     """
-    # Revert unauthorized working tree / staged changes
-    changed = run_git_capture(
-        ['diff', '--name-only', 'HEAD'], workspace_path
-    ).splitlines()
-    staged = run_git_capture(
-        ['diff', '--cached', '--name-only'], workspace_path
-    ).splitlines()
-    wt_unauthorized = set(changed + staged) - allowed
-    if wt_unauthorized:
-        print(f"\n⚠ Reverting {len(wt_unauthorized)} unauthorized working tree change(s):")
-        for filepath in sorted(wt_unauthorized):
-            print(f"  - {filepath}")
-        for filepath in wt_unauthorized:
-            subprocess.run(
-                ['git', 'checkout', 'HEAD', '--', filepath],
-                cwd=workspace_path, env=get_git_env(), check=False
-            )
-
-    # Remove unauthorized untracked files (e.g. .gitignore files kiro created)
-    untracked = run_git_capture(
-        ['ls-files', '--others', '--exclude-standard'], workspace_path
-    ).splitlines()
-    untracked_unauthorized = set(untracked) - allowed
-    if untracked_unauthorized:
-        print(f"\n⚠ Removing {len(untracked_unauthorized)} unauthorized untracked file(s):")
-        for filepath in sorted(untracked_unauthorized):
-            print(f"  - {filepath}")
-            (workspace_path / filepath).unlink(missing_ok=True)
 
     # Revert unauthorized committed changes.
     # Use soft reset to squash all commits since original-version, then
@@ -242,17 +215,6 @@ def revert_unauthorized_changes(workspace_path: Path,
         ['diff', '--name-only', 'original-version..HEAD'], workspace_path
     ).splitlines())
     commit_unauthorized = committed - allowed
-
-    # Also remove files that are in the allowed set but were created from
-    # scratch (not present at original-version).  The agent should never
-    # create new files — only modify existing ones.
-    for filepath in committed & allowed:
-        exists_at_base = subprocess.run(
-            ['git', 'cat-file', '-e', f'original-version:{filepath}'],
-            cwd=workspace_path, env=get_git_env(), capture_output=True, check=False
-        ).returncode == 0
-        if not exists_at_base:
-            commit_unauthorized.add(filepath)
 
     if not commit_unauthorized:
         return
