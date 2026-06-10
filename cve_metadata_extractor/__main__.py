@@ -65,6 +65,8 @@ def parse_arguments(cfg):
                        help='Skip cache and fetch fresh data')
     output_group.add_argument('--download-patches', action='store_true',
                        help='Download .patch files and extract Debian source patches')
+    output_group.add_argument('--reprocess-missing-series', action='store_true',
+                       help='Re-fetch PR/issue data for CVEs that lack series in existing output')
 
     # --- OE integration ---
     oe_group = parser.add_argument_group('OpenEmbedded integration')
@@ -280,13 +282,40 @@ def main():
     )
     print(f"Found {len(known_affected)} CVEs to process")
 
-    results = {}
+    # Load existing output for incremental processing
+    existing_results = {}
+    if os.path.isfile(args.output):
+        try:
+            with open(args.output, encoding='utf-8') as f:
+                existing_results = json.load(f)
+            print(f"Loaded {len(existing_results)} existing results from {args.output}")
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"WARNING: Could not load existing output: {e}", file=sys.stderr)
+
+    results = dict(existing_results)
+    skipped = 0
+    reprocessed = 0
     for idx, cve in enumerate(known_affected, 1):
+        cve_id = cve['id']
+        if cve_id in existing_results:
+            if args.reprocess_missing_series and not existing_results[cve_id].get('series'):
+                # Invalidate cached PR/issue URLs so they get re-fetched
+                for ref in existing_results[cve_id].get('references', []):
+                    PR_CACHE.pop(ref['url'], None)
+                reprocessed += 1
+            else:
+                skipped += 1
+                continue
         result = process_cve(
             cve, idx, len(known_affected), args,
             active_sources, stats, oe_token)
         if result:
-            results[cve['id']] = result
+            results[cve_id] = result
+
+    if skipped:
+        print(f"\nSkipped {skipped} already-processed CVEs")
+    if reprocessed:
+        print(f"Reprocessed {reprocessed} CVEs missing series data")
 
     print(f"\nSaving results to {args.output}...")
     with open(args.output, 'w', encoding='utf-8') as f:
