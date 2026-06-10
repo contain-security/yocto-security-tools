@@ -53,7 +53,7 @@ from .workspace import prepare_cve_branch, setup_devtool_workspace, setup_upstre
 
 
 def _kill_bitbake_server() -> None:
-    """Kill any running bitbake server via its lockfile PID."""
+    """Kill any running bitbake server and all child processes."""
     import os
     import signal
     import time
@@ -67,17 +67,40 @@ def _kill_bitbake_server() -> None:
         return
     try:
         pid = int(lockfile.read_text().strip())
-        os.kill(pid, signal.SIGTERM)
-        time.sleep(2)
-        with contextlib.suppress(ProcessLookupError):
+        # Kill entire process group to catch workers and child processes
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, signal.SIGTERM)
+        time.sleep(3)
+        # Force-kill stragglers
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.kill(pid, signal.SIGKILL)
     except (ValueError, ProcessLookupError, PermissionError, OSError):
         pass
-    # Remove stale socket so fresh server starts cleanly
-    sock = Path(builddir) / 'bitbake.sock'
-    sock.unlink(missing_ok=True)
-    lockfile.unlink(missing_ok=True)
-    time.sleep(1)
+    # Remove all stale IPC files so a fresh server starts cleanly
+    build = Path(builddir)
+    for pattern in ('bitbake.sock', 'bitbake.lock', 'hashserve.sock'):
+        (build / pattern).unlink(missing_ok=True)
+    time.sleep(2)
+
+
+def _ensure_devtool_branch(workspace_path: Path) -> None:
+    """Ensure the workspace source tree is on the devtool branch.
+
+    After agent conflict resolution, the tree may be left on the CVE branch.
+    devtool finish requires the devtool branch to generate patches correctly.
+    """
+    result = run_cmd_capture(['git', 'branch', '--show-current'], cwd=workspace_path)
+    current = result.stdout.strip() if result.returncode == 0 else ''
+    if current != 'devtool':
+        logger.warning("⚠ Agent switched to %s branch — forcing back to devtool",
+                       current or '(detached)')
+        if run_cmd(['git', 'checkout', '-f', 'devtool'], cwd=workspace_path) != 0:
+            raise GitError("Failed to checkout devtool branch for finish step")
 
 
 def _run_build_step(state: WorkflowState) -> None:
@@ -169,6 +192,9 @@ def finish_cve_workflow(state: WorkflowState) -> None:
             cwd=state.workspace_path)
 
     if should_run('finish'):
+        # Ensure we're on the devtool branch — devtool finish uses it to
+        # generate patches.  The agent may have left us on the CVE branch.
+        _ensure_devtool_branch(state.workspace_path)
         saved_extras = save_bbappend_extras(state.meta_layer, state.recipe)
         pre_finish_entries = snapshot_src_uri(state.meta_layer, state.recipe)
         if state.bbappend:
@@ -188,16 +214,19 @@ def finish_cve_workflow(state: WorkflowState) -> None:
                 logger.warning("devtool reset failed, continuing anyway")
         else:
             logger.info("Running devtool finish %s %s", state.recipe, state.meta_layer)
+            # Kill stale bitbake server (e.g. from ptest image build) so
+            # devtool finish gets a fresh server that picks up workspace changes.
+            _kill_bitbake_server()
             ret = run_cmd(['devtool', 'finish', '-f', '-n',
                            state.recipe, str(state.meta_layer)],
-                          timeout=300)
+                          timeout=600)
             if ret == -1:
                 logger.warning("devtool finish timed out — killing bitbake "
                                "server and retrying")
                 _kill_bitbake_server()
                 ret = run_cmd(['devtool', 'finish', '-f', '-n',
                                state.recipe, str(state.meta_layer)],
-                              timeout=300)
+                              timeout=600)
             if ret != 0:
                 save_progress(state, 'finish')
                 raise GitError("Git operation failed")
@@ -316,8 +345,12 @@ def continue_from_conflict() -> WorkflowState:
                 raise ConflictError("Conflict detected")
         logger.info("✓ All remaining commits applied successfully")
 
-    # After conflict resolution, transfer commits to devtool branch
-    state.current_step = 'cherry_pick_to_devtool'
+    # After conflict resolution, transfer commits to devtool branch.
+    # Only reset to cherry_pick_to_devtool if we haven't passed that step yet.
+    post_conflict_steps = {'cherry_pick_to_devtool', 'build_after_patch',
+                           'ptest_after_patch', 'finish'}
+    if state.current_step not in post_conflict_steps:
+        state.current_step = 'cherry_pick_to_devtool'
     return state
 
 
