@@ -105,7 +105,8 @@ def amend_commit_with_summary(workspace_path: Path, upstream_sha: str,
                               summary: str) -> None:
     """Amend the HEAD commit message to append the change summary.
 
-    Skips if kiro already wrote detailed backport notes.
+    If the AI replaced the original upstream message with backport notes,
+    restores the original message and appends the notes after it.
 
     Args:
         workspace_path: Path to workspace.
@@ -117,8 +118,6 @@ def amend_commit_with_summary(workspace_path: Path, upstream_sha: str,
     if f"Changes from upstream commit {upstream_sha[:12]}" in current_msg:
         return
 
-    # Strip trailing CVE/Upstream-Status block added by cve_corrector,
-    # but only if kiro has not written Backport-Resolution notes after it.
     lines = current_msg.rstrip().splitlines()
 
     has_kiro_notes = any(
@@ -130,7 +129,63 @@ def amend_commit_with_summary(workspace_path: Path, upstream_sha: str,
         for line in lines
     )
 
+    # Detect if 'Backport Resolution:' is the start of the message body
+    # (AI replaced original instead of appending).
+    kiro_note_markers = ('Backport Resolution:', 'Backport-Resolution:',
+                         'Backport changes:', 'Conflict resolution notes:')
     if not has_kiro_notes:
+        has_kiro_notes = any(
+            line.strip().startswith(kiro_note_markers) for line in lines
+        )
+
+    # Check if original upstream message body was preserved.
+    # If the first non-blank line after the subject is a kiro note marker,
+    # or the subject itself is a kiro note, the AI replaced the body.
+    original_subject = run_git_stdout(
+        ['log', '-1', '--format=%s', upstream_sha], workspace_path
+    ).strip()
+
+    body_preserved = True
+    if has_kiro_notes and original_subject:
+        # Case 1: subject itself is a kiro marker (entire message replaced)
+        if lines and lines[0].strip().startswith(kiro_note_markers):
+            body_preserved = False
+        else:
+            # Case 2: subject kept but body starts with kiro note
+            body_start = 1
+            while body_start < len(lines) and not lines[body_start].strip():
+                body_start += 1
+            if body_start < len(lines) and lines[body_start].strip().startswith(
+                kiro_note_markers
+            ):
+                body_preserved = False
+
+    if has_kiro_notes and not body_preserved and original_subject:
+        # AI replaced the body — restore original and append kiro notes
+        original_body = run_git_stdout(
+            ['log', '-1', '--format=%b', upstream_sha], workspace_path
+        ).rstrip()
+
+        # Extract kiro notes from current message
+        kiro_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith(kiro_note_markers):
+                kiro_start = i
+                break
+        kiro_notes = '\n'.join(lines[kiro_start:]) if kiro_start is not None else ''
+
+        # Reconstruct: original subject + body + kiro notes + summary
+        new_msg = original_subject + '\n'
+        if original_body:
+            new_msg += '\n' + original_body + '\n'
+        if kiro_notes:
+            new_msg += '\n' + kiro_notes + '\n'
+        new_msg += '\n' + summary + '\n'
+    elif has_kiro_notes:
+        # Original message preserved with kiro notes — just append summary
+        new_msg = '\n'.join(lines).strip() + f'\n\n{summary}\n'
+    else:
+        # No kiro notes — strip trailing CVE block and append summary
         last_cve_idx = None
         for i in range(len(lines) - 1, -1, -1):
             if lines[i].startswith('CVE:'):
@@ -141,12 +196,6 @@ def amend_commit_with_summary(workspace_path: Path, upstream_sha: str,
             while end > 0 and not lines[end - 1].strip():
                 end -= 1
             lines = lines[:end]
-
-    if has_kiro_notes:
-        # kiro already wrote detailed notes — amend to normalize whitespace
-        # but do not append the auto-generated summary.
-        new_msg = '\n'.join(lines).strip() + '\n'
-    else:
         new_msg = '\n'.join(lines).strip() + f'\n\n{summary}\n'
 
     result = subprocess.run(

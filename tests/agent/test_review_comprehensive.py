@@ -18,7 +18,8 @@ class TestAmendSkipsKiroNotes:
         amend_commit_with_summary(Path('/ws'), 'def456', 'summary')
         msg = mock_run.call_args[0][0][-1]
         assert 'Backport-Resolution' in msg
-        assert 'summary' not in msg
+        # Summary is now appended alongside kiro notes
+        assert 'summary' in msg
 
     @patch('subprocess.run')
     @patch('cve_agent.review.run_git_stdout',
@@ -27,7 +28,8 @@ class TestAmendSkipsKiroNotes:
         amend_commit_with_summary(Path('/ws'), 'def456', 'summary')
         msg = mock_run.call_args[0][0][-1]
         assert 'Backport changes' in msg
-        assert 'summary' not in msg
+        # Summary is now appended alongside kiro notes
+        assert 'summary' in msg
 
     @patch('subprocess.run')
     @patch('cve_agent.review.run_git_stdout',
@@ -36,7 +38,8 @@ class TestAmendSkipsKiroNotes:
         amend_commit_with_summary(Path('/ws'), 'def456', 'summary')
         msg = mock_run.call_args[0][0][-1]
         assert 'Conflict resolution notes' in msg
-        assert 'summary' not in msg
+        # Summary is now appended alongside kiro notes
+        assert 'summary' in msg
 
 
 class TestAmendStripsCveBlock:
