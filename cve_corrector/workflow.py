@@ -103,6 +103,21 @@ def _ensure_devtool_branch(workspace_path: Path) -> None:
             raise GitError("Failed to checkout devtool branch for finish step")
 
 
+def _ensure_layer_branch(meta_layer: Path) -> None:
+    """Ensure the target meta-layer is on a branch (not detached HEAD).
+
+    devtool finish commits into the meta-layer, which requires a branch.
+    A detached HEAD causes a cryptic git failure at the end of the workflow.
+    """
+    result = run_cmd_capture(['git', 'branch', '--show-current'], cwd=meta_layer)
+    branch = result.stdout.strip() if result.returncode == 0 else ''
+    if not branch:
+        raise GitError(
+            f"Meta-layer {meta_layer} has detached HEAD. "
+            f"Check out a branch (e.g. 'git checkout <branch>') before running."
+        )
+
+
 def _run_build_step(state: WorkflowState) -> None:
     """Build recipe after patch, saving progress on failure."""
     if state.skip_build:
@@ -192,6 +207,9 @@ def finish_cve_workflow(state: WorkflowState) -> None:
             cwd=state.workspace_path)
 
     if should_run('finish'):
+        # Pre-flight: meta-layer must be on a branch for devtool finish to commit.
+        if state.meta_layer:
+            _ensure_layer_branch(state.meta_layer)
         # Ensure we're on the devtool branch — devtool finish uses it to
         # generate patches.  The agent may have left us on the CVE branch.
         _ensure_devtool_branch(state.workspace_path)
