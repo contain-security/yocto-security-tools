@@ -205,6 +205,9 @@ def finish_cve_workflow(state: WorkflowState) -> None:
     logger.info("Cleaning workspace")
     run_cmd(['git', 'clean', '-fdx', '-e', 'oe-local-files'],
             cwd=state.workspace_path)
+    # Restore modified tracked files (e.g. autotools-regenerated Makefile.in)
+    # so devtool finish doesn't choke exporting them to a partial temp dir.
+    run_cmd(['git', 'checkout', '.'], cwd=state.workspace_path)
 
     if should_run('finish'):
         # Pre-flight: meta-layer must be on a branch for devtool finish to commit.
