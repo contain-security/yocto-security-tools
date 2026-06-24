@@ -115,7 +115,8 @@ class TestAmendCommit:
         mock_run.assert_called_once()
         msg = mock_run.call_args[0][0][-1]
         assert "Backport-Resolution" in msg
-        assert "summary" not in msg
+        # Summary is now always appended alongside kiro notes
+        assert "summary" in msg
 
 
 class TestSaveReviewDiff:

@@ -118,6 +118,9 @@ def extract_from_ubuntu_response(ubuntu_data):
     return patch_links, hashes, series, references
 
 
+_CIRCUIT_BREAKER_THRESHOLD = 3
+
+
 class UbuntuSource(CveSource):
     '''Ubuntu Security API source.'''
     name = 'ubuntu'
@@ -127,6 +130,9 @@ class UbuntuSource(CveSource):
             'help': 'Disable Ubuntu source',
         }),
     ]
+
+    def __init__(self) -> None:
+        self._failures = 0
 
     def setup(self, args, cfg):
         self._cache = args.cache
@@ -138,6 +144,11 @@ class UbuntuSource(CveSource):
     def extract(self, cve_id, stats):
         '''Extract metadata from Ubuntu Security API for a single CVE.'''
         hashes, patches, series, references = [], [], [], []
+        if self._failures >= _CIRCUIT_BREAKER_THRESHOLD:
+            logging.warning('Ubuntu source disabled after %d consecutive'
+                            ' failures; skipping %s',
+                            self._failures, cve_id)
+            return hashes, patches, series, references
         try:
             ubuntu_data = get_ubuntu_cve(self._cache, cve_id, self._refresh)
             patch_links, hash_list, pr_series, refs = \
@@ -149,9 +160,13 @@ class UbuntuSource(CveSource):
             hashes, patches, references = tag_results(
                 hash_list, patch_links, refs, 'ubuntu')
             series = pr_series
+            self._failures = 0
         except Exception:  # pylint: disable=broad-except
-            logging.warning('Failed to extract from Ubuntu for %s',
-                            cve_id, exc_info=True)
+            self._failures += 1
+            logging.warning('Failed to extract from Ubuntu for %s'
+                            ' (%d/%d failures)',
+                            cve_id, self._failures,
+                            _CIRCUIT_BREAKER_THRESHOLD, exc_info=True)
         return hashes, patches, series, references
 
     def deduce_component(self, cve_id, cache):

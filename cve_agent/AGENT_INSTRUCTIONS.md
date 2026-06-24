@@ -66,6 +66,12 @@ git log --oneline -20 -- <file>             # file history for context
 Resolve conflicts, then:
 ```bash
 git add <resolved_files>                    # ONLY allowed files
+```
+
+If you adapted the patch (not a verbatim cherry-pick), append your backport
+notes to `.git/MERGE_MSG` — **read the file first**, keep the original content,
+and append your notes after a blank line. Then:
+```bash
 git cherry-pick --no-edit --continue
 ```
 
@@ -115,8 +121,16 @@ make/cmake/gcc directly.
 
 ## Commit Message Format
 
-Only add notes if you adapted the patch. Use EXACTLY this markdown format — no
+**IMPORTANT: Preserve the original upstream commit message.** The `.git/MERGE_MSG`
+file contains the original upstream commit subject and body. You MUST keep it
+intact and only **append** your backport notes after it. Never replace or rewrite
+the original message.
+
+Only append notes if you adapted the patch. Use EXACTLY this markdown format — no
 alternative headers like "Conflict resolution notes:" or "Backport changes:".
+
+Append the following block after the original commit message (separated by a
+blank line):
 
 ```
 Backport Resolution: <One or two sentences explaining what the upstream commit does — the functional
@@ -132,6 +146,8 @@ Conflicts Resolved:
 ```
 
 Rules:
+- **Never delete or rewrite the original subject line or body** from `.git/MERGE_MSG`
+- Append your notes after the existing message, separated by a blank line
 - Start with a summary of the upstream fix's purpose (what it changes, why)
 - List ONLY files that had conflicts or required adaptation — skip clean files
 - For each file, state the conflict count and describe each adaptation

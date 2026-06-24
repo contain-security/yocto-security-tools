@@ -259,6 +259,43 @@ class TestUbuntuSource(unittest.TestCase):
             result = source.deduce_component('CVE-9999-0000', tmpdir)
             self.assertIsNone(result)
 
+    def test_circuit_breaker_aborts_after_threshold(self):
+        '''After 3 cumulative failures extract() returns empty and skips.'''
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = UbuntuSource()
+            source._cache = tmpdir
+            source._refresh = False
+
+            stats = {'ubuntu_hashes': 0, 'ubuntu_patches': 0}
+            with patch('cve_metadata_extractor.ubuntu.get_ubuntu_cve',
+                       side_effect=RuntimeError('network error')):
+                for i in range(3):
+                    source.extract(f'CVE-2026-000{i}', stats)
+            self.assertEqual(source._failures, 3)
+
+            # 4th call must be skipped (no get_ubuntu_cve call)
+            with patch('cve_metadata_extractor.ubuntu.get_ubuntu_cve') as mock_get:
+                with self.assertLogs('root', level='WARNING') as cm:
+                    result = source.extract('CVE-2026-9999', stats)
+                mock_get.assert_not_called()
+                self.assertEqual(result, ([], [], [], []))
+                self.assertTrue(any('Ubuntu source disabled' in m
+                                    for m in cm.output))
+
+    def test_circuit_breaker_resets_on_success(self):
+        '''A successful extract resets the failure counter.'''
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = UbuntuSource()
+            source._cache = tmpdir
+            source._refresh = False
+            source._failures = 2
+
+            stats = {'ubuntu_hashes': 0, 'ubuntu_patches': 0}
+            with patch('cve_metadata_extractor.ubuntu.get_ubuntu_cve',
+                       return_value={}):
+                source.extract('CVE-2026-1111', stats)
+            self.assertEqual(source._failures, 0)
+
 
 if __name__ == '__main__':
     unittest.main()
