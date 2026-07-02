@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: MIT
+name: Bump patch version
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    # Skip if this commit is already a version bump or already touched pyproject.toml
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if pyproject.toml version was already changed
+        id: check
+        run: |
+          if git diff-tree --no-commit-id --name-only -r HEAD | grep -q '^pyproject\.toml$'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump patch version
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          NEW=$(python3 -c "
+          import re, sys
+          text = open('pyproject.toml').read()
+          m = re.search(r'^version = \"(\d+\.\d+\.)(\d+)\"', text, re.M)
+          if not m: sys.exit('version not found in pyproject.toml')
+          new_ver = m.group(1) + str(int(m.group(2)) + 1)
+          open('pyproject.toml', 'w').write(text.replace(m.group(0), f'version = \"{new_ver}\"'))
+          print(new_ver)
+          ")
+          echo "NEW_VERSION=${NEW}" >> "$GITHUB_ENV"
+          BRANCH="chore/bump-version-${NEW}"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -b "$BRANCH"
+          git add pyproject.toml
+          git commit -s -m "chore: bump version to ${NEW}"
+          git push -u origin "$BRANCH"
+
+      - name: Create Pull Request
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "chore: bump version to ${{ env.NEW_VERSION }}" \
+            --body "Automated patch version bump to ${{ env.NEW_VERSION }}." \
+            --base main \
+            --label "automated"
+          gh pr merge --auto --squash
