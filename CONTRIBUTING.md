@@ -164,3 +164,33 @@ As a reminder, when contributing a change, your `Signed-off-by` line is
 required and the stipulations in the
 [Developer's Statement of Origin 1.1](https://developercertificate.org/) still
 apply.
+
+## Releasing
+
+Releases are published to [PyPI](https://pypi.org/project/yocto-security-tools/) automatically when a GitHub Release is created. The patch version is also bumped automatically after every merge to `main`.
+
+### One-time setup (first release only)
+
+**1. Register a trusted publisher on PyPI**
+
+On [pypi.org](https://pypi.org): Your projects → yocto-security-tools → Publishing → Add a new publisher.
+
+| Field | Value |
+|---|---|
+| Owner | `Ericsson` |
+| Repository | `yocto-security-tools` |
+| Workflow | `publish.yml` |
+| Environment | *(leave blank)* |
+
+No API token is needed. PyPI will accept the OIDC token issued by GitHub Actions.
+
+**2. Enable branch protection (recommended)**
+
+Settings → Branches → Add rule for `main`: require the `CI / test` status check to pass before merging. This ensures every release tag points to a commit that passed CI.
+
+### Release process
+
+1. The bump-version workflow increments the patch version automatically after each PR merge. For a minor or major bump, edit `pyproject.toml` directly in the PR.
+2. Update `CHANGELOG.md` with the changes for the release.
+3. Create a GitHub Release with a tag matching `v{version}` (e.g., `v1.0.5` if `pyproject.toml` says `1.0.5`). The publish workflow will fail fast if the tag and version don't match.
+4. The `publish.yml` workflow runs automatically and uploads the wheel and sdist to PyPI.
