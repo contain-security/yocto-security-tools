@@ -1,6 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # yocto-security-tools
 
+```
+THIS FORK - adds claude as an AI agent backend to the system. 
+Note - it adds it as a full fledged agent within the framework proper - not as a "plugin"
+- religated to directory that's in the .gitignore of the upstream project. Thus no PR for them :-(  
+```
+
 Standalone CVE management tools for Yocto/OpenEmbedded Linux distributions.
 
 ## Tools
