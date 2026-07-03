@@ -429,6 +429,111 @@ class TestCreateLayerCommit:
         assert 'commit/bbb' not in logged
         assert 'commit/ccc' not in logged
 
+    @patch("cve_corrector.meta_layer.get_build_path")
+    @patch("subprocess.run")
+    @patch("cve_corrector.meta_layer.run_cmd", return_value=0)
+    @patch("cve_corrector.git_ops.get_git_user_info", return_value=("A", "a@b.c"))
+    def test_annotates_fix_source(self, mock_info, mock_cmd, mock_subrun, mock_bp,
+                                  tmp_path, caplog):
+        """Each fix URL is annotated with a single preferred source."""
+        mock_bp.return_value = tmp_path
+        meta = tmp_path / "meta"
+        meta.mkdir()
+        mock_subrun.return_value = MagicMock(returncode=0, stdout="")
+        hash_details = [
+            # Multiple sources -> highest priority (cvelistv5 over debian) wins.
+            {'hash': 'aaa', 'url': 'https://github.com/org/repo/commit/aaa',
+             'source': 'debian, cvelistv5'},
+            # Same URL reported by ubuntu and debian -> debian preferred, one line.
+            {'hash': 'bbb', 'url': 'https://github.com/org/repo/commit/bbb',
+             'source': 'ubuntu'},
+            {'hash': 'bbb', 'url': 'https://github.com/org/repo/commit/bbb',
+             'source': 'debian'},
+            # osv is a public shipped source and should be shown.
+            {'hash': 'ccc', 'url': 'https://github.com/org/repo/commit/ccc',
+             'source': 'osv'},
+            # Proprietary source paired with a public one -> public one shown.
+            {'hash': 'ddd', 'url': 'https://github.com/org/repo/commit/ddd',
+             'source': 'bdba, debian'},
+            # Proprietary-only source -> no annotation, URL still listed.
+            {'hash': 'eee', 'url': 'https://github.com/org/repo/commit/eee',
+             'source': 'bdba'},
+        ]
+        import logging
+        with caplog.at_level(logging.INFO, logger="cve_corrector"):
+            create_layer_commit(meta, "openssl", "CVE-2026-31789", skip_confirm=True,
+                                hash_details=hash_details)
+        logged = "\n".join(caplog.messages)
+        assert 'commit/aaa [cvelistv5]' in logged
+        assert 'commit/bbb [debian]' in logged
+        assert 'commit/ccc [osv]' in logged
+        assert 'commit/ddd [debian]' in logged
+        # Proprietary sources are never disclosed.
+        assert 'bdba' not in logged
+        # Proprietary-only reference is listed without a source annotation.
+        assert 'commit/eee\n' in logged
+        assert 'commit/eee [' not in logged
+        # Only a single source is shown per reference.
+        assert 'cvelistv5, debian' not in logged
+        # The bbb URL must appear on a single merged line, not duplicated.
+        assert logged.count('commit/bbb') == 1
+
+    @patch("cve_corrector.meta_layer.get_build_path")
+    @patch("subprocess.run")
+    @patch("cve_corrector.meta_layer.run_cmd", return_value=0)
+    @patch("cve_corrector.git_ops.get_git_user_info", return_value=("A", "a@b.c"))
+    def test_templated_source_references(self, mock_info, mock_cmd, mock_subrun,
+                                         mock_bp, tmp_path, caplog):
+        """A References section lists templated tracker URLs per public source."""
+        mock_bp.return_value = tmp_path
+        meta = tmp_path / "meta"
+        meta.mkdir()
+        mock_subrun.return_value = MagicMock(returncode=0, stdout="")
+        cve = "CVE-2026-56115"
+        hash_details = [
+            {'hash': 'aaa', 'url': 'https://github.com/org/repo/commit/aaa',
+             'source': 'debian'},
+            {'hash': 'bbb', 'url': 'https://github.com/org/repo/commit/bbb',
+             'source': 'ubuntu, osv'},
+            # Proprietary source must not produce a reference URL.
+            {'hash': 'ccc', 'url': 'https://github.com/org/repo/commit/ccc',
+             'source': 'bdba'},
+        ]
+        import logging
+        with caplog.at_level(logging.INFO, logger="cve_corrector"):
+            create_layer_commit(meta, "openssl", cve, skip_confirm=True,
+                                hash_details=hash_details)
+        logged = "\n".join(caplog.messages)
+        # NVD is always present as the canonical record.
+        assert f'https://nvd.nist.gov/vuln/detail/{cve}' in logged
+        assert f'https://security-tracker.debian.org/tracker/{cve}' in logged
+        assert f'https://ubuntu.com/security/{cve}' in logged
+        assert f'https://osv.dev/list?q={cve}' in logged
+        # No proprietary tracker reference is emitted.
+        assert 'bdba' not in logged
+
+    @patch("cve_corrector.meta_layer.get_build_path")
+    @patch("subprocess.run")
+    @patch("cve_corrector.meta_layer.run_cmd", return_value=0)
+    @patch("cve_corrector.git_ops.get_git_user_info", return_value=("A", "a@b.c"))
+    def test_references_nvd_only_without_details(self, mock_info, mock_cmd,
+                                                 mock_subrun, mock_bp, tmp_path,
+                                                 caplog):
+        """With no fix metadata, only the canonical NVD reference is listed."""
+        mock_bp.return_value = tmp_path
+        meta = tmp_path / "meta"
+        meta.mkdir()
+        mock_subrun.return_value = MagicMock(returncode=0, stdout="")
+        cve = "CVE-2026-52846"
+        import logging
+        with caplog.at_level(logging.INFO, logger="cve_corrector"):
+            create_layer_commit(meta, "openssl", cve, skip_confirm=True)
+        logged = "\n".join(caplog.messages)
+        assert f'https://nvd.nist.gov/vuln/detail/{cve}' in logged
+        assert 'security-tracker.debian.org' not in logged
+        assert 'ubuntu.com/security' not in logged
+        assert 'osv.dev' not in logged
+
 
 class TestContinueFromConflict:
     @patch("cve_corrector.workflow.get_state_dir")
