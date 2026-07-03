@@ -39,7 +39,11 @@ from cve_corrector.workflow import (
     save_progress,
     save_workflow_state,
 )
-from cve_corrector.workspace import setup_upstream_remote
+from cve_corrector.workspace import (
+    _alternate_protocol_url,
+    _fetch_remote,
+    setup_upstream_remote,
+)
 
 
 def _state(tmp_path, **kwargs):
@@ -865,3 +869,45 @@ class TestSetupUpstreamRemoteFixSource:
             if len(c.args) and isinstance(c.args[0], list)
             and 'upstream-fix' in c.args[0]]
         assert not fix_calls, "should not add a fix remote when repos match"
+
+
+class TestProtocolFallback:
+    """Fetches retry over an alternate transport when the first fails
+    (regression: relocated OE SDK breaks https via a bad http.sslCAInfo)."""
+
+    def test_alternate_https_to_git(self):
+        assert (_alternate_protocol_url("https://sourceware.org/git/bzip2")
+                == "git://sourceware.org/git/bzip2")
+
+    def test_alternate_git_to_https(self):
+        assert (_alternate_protocol_url("git://sourceware.org/git/bzip2.git")
+                == "https://sourceware.org/git/bzip2.git")
+
+    def test_alternate_local_path_none(self):
+        assert _alternate_protocol_url("/mirrors/bzip2.git") is None
+
+    @patch("cve_corrector.workspace.run_cmd")
+    def test_fetch_retries_with_git_protocol(self, mock_cmd, tmp_path):
+        # https fetch fails (128), set-url succeeds, git:// fetch succeeds.
+        mock_cmd.side_effect = [128, 0, 0]
+        ok = _fetch_remote(tmp_path, "upstream-fix",
+                           "https://sourceware.org/git/bzip2")
+        assert ok is True
+        mock_cmd.assert_any_call(
+            ['git', 'remote', 'set-url', 'upstream-fix',
+             'git://sourceware.org/git/bzip2'], cwd=tmp_path)
+
+    @patch("cve_corrector.workspace.run_cmd")
+    def test_fetch_succeeds_first_try_no_retry(self, mock_cmd, tmp_path):
+        mock_cmd.return_value = 0
+        ok = _fetch_remote(tmp_path, "upstream",
+                           "git://sourceware.org/git/bzip2-tests.git")
+        assert ok is True
+        assert mock_cmd.call_count == 1  # no set-url / retry
+
+    @patch("cve_corrector.workspace.run_cmd")
+    def test_fetch_fails_both_protocols(self, mock_cmd, tmp_path):
+        mock_cmd.side_effect = [128, 0, 128]  # fetch, set-url, retry-fetch
+        ok = _fetch_remote(tmp_path, "upstream-fix",
+                           "https://sourceware.org/git/bzip2")
+        assert ok is False

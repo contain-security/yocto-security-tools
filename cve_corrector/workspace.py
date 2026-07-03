@@ -166,7 +166,7 @@ def setup_upstream_remote(workspace_path: Path, mirror_path: Optional[Path],
         logger.debug("Upstream remote already exists, skipping...")
 
     logger.info("Fetching upstream references")
-    if run_cmd(['git', 'fetch', 'upstream', '--tags', '--progress'], cwd=workspace_path) != 0:
+    if not _fetch_remote(workspace_path, 'upstream', upstream_url):
         logger.warning("Failed to fetch upstream — continuing without upstream history")
         run_cmd(['git', 'remote', 'remove', 'upstream'], cwd=workspace_path)
         return None
@@ -182,8 +182,7 @@ def setup_upstream_remote(workspace_path: Path, mirror_path: Optional[Path],
             run_cmd(['git', 'remote', 'add', 'upstream-fix', fix_repo_url],
                     cwd=workspace_path)
         logger.info("Fetching fix-source references")
-        if run_cmd(['git', 'fetch', 'upstream-fix', '--tags', '--progress'],
-                   cwd=workspace_path) != 0:
+        if not _fetch_remote(workspace_path, 'upstream-fix', fix_repo_url):
             logger.warning(
                 "Failed to fetch fix-source repo %s — fix commits may be "
                 "unavailable", fix_repo_url)
@@ -202,6 +201,45 @@ def _urls_differ(url_a: str, url_b: str) -> bool:
                 .replace('https://', '').replace('http://', '')
                 .replace('git://', ''))
     return normalize(url_a) != normalize(url_b)
+
+
+def _alternate_protocol_url(url: str) -> Optional[str]:
+    """Return the same repo URL over an alternate transport protocol.
+
+    Swaps between ``https://`` and ``git://`` for the same host/path. Used
+    as a fallback when one transport is unusable in the build environment —
+    e.g. a relocated OE SDK whose git sets ``http.sslCAInfo`` to a
+    non-existent CA bundle, which breaks all ``https`` git access while
+    ``git://`` still works.
+
+    Returns None for local paths or unrecognised schemes.
+    """
+    if url.startswith('https://'):
+        return 'git://' + url[len('https://'):]
+    if url.startswith('git://'):
+        return 'https://' + url[len('git://'):]
+    return None
+
+
+def _fetch_remote(workspace_path: Path, remote_name: str, url: str) -> bool:
+    """Fetch a remote's refs and tags, retrying over an alternate protocol.
+
+    On the first failure, retries once with ``https``<->``git`` swapped
+    (updating the remote URL) before giving up. This tolerates build
+    environments where one transport is broken (see _alternate_protocol_url).
+
+    Returns True on success, False if both attempts fail.
+    """
+    if run_cmd(['git', 'fetch', remote_name, '--tags', '--progress'],
+               cwd=workspace_path) == 0:
+        return True
+    alt = _alternate_protocol_url(url)
+    if not alt:
+        return False
+    logger.warning("Fetch of %s failed — retrying via %s", url, alt)
+    run_cmd(['git', 'remote', 'set-url', remote_name, alt], cwd=workspace_path)
+    return run_cmd(['git', 'fetch', remote_name, '--tags', '--progress'],
+                   cwd=workspace_path) == 0
 
 
 def prepare_cve_branch(workspace_path: Path, version: Optional[str],
