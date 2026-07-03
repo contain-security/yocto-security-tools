@@ -28,6 +28,73 @@ def _export_commit_patch(meta_layer: Path) -> None:
         logger.warning("Failed to export patch via git format-patch")
 
 
+# Preferred order for attributing a fix reference to a single source.
+# Sources earlier in this list win when a commit is reported by several feeds.
+# This is the set of public, non-proprietary sources shipped with
+# yocto-security-tools (see cve_metadata_extractor). Proprietary plugin sources
+# such as "bdba" are deliberately excluded so they never leak into public
+# commit messages. It is defined here (rather than imported from the extractor)
+# to preserve the acyclic dependency invariant: the corrector must not depend
+# on the extractor.
+_SOURCE_PRIORITY = ('nvd', 'cvelistv5', 'debian', 'ubuntu', 'osv')
+
+# Templated tracker/advisory URLs for each public source, keyed by CVE id.
+# These point at the source's page for the CVE and are derived purely from the
+# CVE id (no per-CVE data needed). Proprietary sources have no template here, so
+# they can never be turned into a public reference URL.
+_SOURCE_URL_TEMPLATES = {
+    'nvd': 'https://nvd.nist.gov/vuln/detail/{cve}',
+    'cvelistv5': 'https://www.cve.org/CVERecord?id={cve}',
+    'debian': 'https://security-tracker.debian.org/tracker/{cve}',
+    'ubuntu': 'https://ubuntu.com/security/{cve}',
+    'osv': 'https://osv.dev/list?q={cve}',
+}
+
+
+def _preferred_source(sources: list[str]) -> str:
+    """Pick the single most-preferred public source from a list.
+
+    Only the public sources in ``_SOURCE_PRIORITY`` are eligible; proprietary
+    plugin sources (e.g. "bdba") are ignored so they are never disclosed in
+    commit messages.
+
+    Args:
+        sources: Source names associated with a fix reference.
+
+    Returns:
+        The highest-priority public source; an empty string if none of the
+        sources are public (e.g. a proprietary-only reference).
+    """
+    for preferred in _SOURCE_PRIORITY:
+        if preferred in sources:
+            return preferred
+    return ''
+
+
+def _reference_urls(cve_id: str, hash_details: Optional[list]) -> list[str]:
+    """Build templated tracker URLs for the public sources of a CVE.
+
+    NVD is always included as the canonical record. Any additional public
+    source (see ``_SOURCE_URL_TEMPLATES``) that contributed a fix reference is
+    added, ordered by ``_SOURCE_PRIORITY``. Proprietary sources are excluded.
+
+    Args:
+        cve_id: The CVE identifier used to fill in each URL template.
+        hash_details: Fix metadata entries whose ``source`` field is inspected.
+
+    Returns:
+        Templated reference URLs, one per contributing public source.
+    """
+    present = {'nvd'}
+    for d in hash_details or []:
+        for src in (d.get('source') or '').split(','):
+            src = src.strip()
+            if src in _SOURCE_URL_TEMPLATES:
+                present.add(src)
+    return [_SOURCE_URL_TEMPLATES[s].format(cve=cve_id)
+            for s in _SOURCE_PRIORITY if s in present]
+
+
 def create_layer_commit(meta_layer: Optional[Path], recipe: str, cve_id: str,
                         ptest_output: Optional[str] = None, skip_confirm: bool = False,
                         hash_details: Optional[list] = None,
@@ -43,24 +110,46 @@ def create_layer_commit(meta_layer: Optional[Path], recipe: str, cve_id: str,
         return False
 
     author, email = get_git_user_info()
-    commit_msg = f"{recipe}: fix {cve_id}\n\nBackport patch to fix {cve_id}.\n"
-    commit_msg += f"https://nvd.nist.gov/vuln/detail/{cve_id}\n\n"
+    commit_msg = f"{recipe}: fix {cve_id}\n\nBackport patch to fix {cve_id}.\n\n"
 
-    # Add upstream fix references — prefer PR link, fall back to commit URLs
+    # Templated per-source tracker references (NVD plus any contributing public
+    # source), derived from the CVE id. Proprietary sources are never listed.
+    commit_msg += "References:\n"
+    for ref_url in _reference_urls(cve_id, hash_details):
+        commit_msg += f"  {ref_url}\n"
+    commit_msg += "\n"
+
+    # Add upstream fix references — prefer PR link, fall back to commit URLs.
+    # Each reference is annotated with a single source, chosen by the preferred
+    # order below, so reviewers can trace provenance without noise.
     pull_url = (series_state or {}).get('pull_url', '')
     if pull_url:
         commit_msg += f"Upstream fix:\n  {pull_url}\n\n"
     elif hash_details:
         if used_commits:
             used_set = set(used_commits)
-            urls = dict.fromkeys(d['url'] for d in hash_details
-                                 if d.get('url') and d.get('hash') in used_set)
+            details = [d for d in hash_details
+                       if d.get('url') and d.get('hash') in used_set]
         else:
-            urls = dict.fromkeys(d['url'] for d in hash_details if d.get('url'))
-        if urls:
+            details = [d for d in hash_details if d.get('url')]
+        # Map each URL to the ordered, de-duplicated list of sources it came
+        # from. The 'source' field may be a comma-joined string (e.g.
+        # "debian, ubuntu") when the same commit was reported by multiple feeds.
+        url_sources: dict[str, list[str]] = {}
+        for d in details:
+            srcs = url_sources.setdefault(d['url'], [])
+            for src in (d.get('source') or '').split(','):
+                src = src.strip()
+                if src and src not in srcs:
+                    srcs.append(src)
+        if url_sources:
             commit_msg += "Upstream fix:\n"
-            for url in urls:
-                commit_msg += f"  {url}\n"
+            for url, srcs in url_sources.items():
+                source = _preferred_source(srcs)
+                if source:
+                    commit_msg += f"  {url} [{source}]\n"
+                else:
+                    commit_msg += f"  {url}\n"
             commit_msg += "\n"
 
     if ptest_output:

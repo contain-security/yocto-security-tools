@@ -39,7 +39,11 @@ from cve_corrector.workflow import (
     save_progress,
     save_workflow_state,
 )
-from cve_corrector.workspace import setup_upstream_remote
+from cve_corrector.workspace import (
+    _alternate_protocol_url,
+    _fetch_remote,
+    setup_upstream_remote,
+)
 
 
 def _state(tmp_path, **kwargs):
@@ -429,6 +433,111 @@ class TestCreateLayerCommit:
         assert 'commit/bbb' not in logged
         assert 'commit/ccc' not in logged
 
+    @patch("cve_corrector.meta_layer.get_build_path")
+    @patch("subprocess.run")
+    @patch("cve_corrector.meta_layer.run_cmd", return_value=0)
+    @patch("cve_corrector.git_ops.get_git_user_info", return_value=("A", "a@b.c"))
+    def test_annotates_fix_source(self, mock_info, mock_cmd, mock_subrun, mock_bp,
+                                  tmp_path, caplog):
+        """Each fix URL is annotated with a single preferred source."""
+        mock_bp.return_value = tmp_path
+        meta = tmp_path / "meta"
+        meta.mkdir()
+        mock_subrun.return_value = MagicMock(returncode=0, stdout="")
+        hash_details = [
+            # Multiple sources -> highest priority (cvelistv5 over debian) wins.
+            {'hash': 'aaa', 'url': 'https://github.com/org/repo/commit/aaa',
+             'source': 'debian, cvelistv5'},
+            # Same URL reported by ubuntu and debian -> debian preferred, one line.
+            {'hash': 'bbb', 'url': 'https://github.com/org/repo/commit/bbb',
+             'source': 'ubuntu'},
+            {'hash': 'bbb', 'url': 'https://github.com/org/repo/commit/bbb',
+             'source': 'debian'},
+            # osv is a public shipped source and should be shown.
+            {'hash': 'ccc', 'url': 'https://github.com/org/repo/commit/ccc',
+             'source': 'osv'},
+            # Proprietary source paired with a public one -> public one shown.
+            {'hash': 'ddd', 'url': 'https://github.com/org/repo/commit/ddd',
+             'source': 'bdba, debian'},
+            # Proprietary-only source -> no annotation, URL still listed.
+            {'hash': 'eee', 'url': 'https://github.com/org/repo/commit/eee',
+             'source': 'bdba'},
+        ]
+        import logging
+        with caplog.at_level(logging.INFO, logger="cve_corrector"):
+            create_layer_commit(meta, "openssl", "CVE-2026-31789", skip_confirm=True,
+                                hash_details=hash_details)
+        logged = "\n".join(caplog.messages)
+        assert 'commit/aaa [cvelistv5]' in logged
+        assert 'commit/bbb [debian]' in logged
+        assert 'commit/ccc [osv]' in logged
+        assert 'commit/ddd [debian]' in logged
+        # Proprietary sources are never disclosed.
+        assert 'bdba' not in logged
+        # Proprietary-only reference is listed without a source annotation.
+        assert 'commit/eee\n' in logged
+        assert 'commit/eee [' not in logged
+        # Only a single source is shown per reference.
+        assert 'cvelistv5, debian' not in logged
+        # The bbb URL must appear on a single merged line, not duplicated.
+        assert logged.count('commit/bbb') == 1
+
+    @patch("cve_corrector.meta_layer.get_build_path")
+    @patch("subprocess.run")
+    @patch("cve_corrector.meta_layer.run_cmd", return_value=0)
+    @patch("cve_corrector.git_ops.get_git_user_info", return_value=("A", "a@b.c"))
+    def test_templated_source_references(self, mock_info, mock_cmd, mock_subrun,
+                                         mock_bp, tmp_path, caplog):
+        """A References section lists templated tracker URLs per public source."""
+        mock_bp.return_value = tmp_path
+        meta = tmp_path / "meta"
+        meta.mkdir()
+        mock_subrun.return_value = MagicMock(returncode=0, stdout="")
+        cve = "CVE-2026-56115"
+        hash_details = [
+            {'hash': 'aaa', 'url': 'https://github.com/org/repo/commit/aaa',
+             'source': 'debian'},
+            {'hash': 'bbb', 'url': 'https://github.com/org/repo/commit/bbb',
+             'source': 'ubuntu, osv'},
+            # Proprietary source must not produce a reference URL.
+            {'hash': 'ccc', 'url': 'https://github.com/org/repo/commit/ccc',
+             'source': 'bdba'},
+        ]
+        import logging
+        with caplog.at_level(logging.INFO, logger="cve_corrector"):
+            create_layer_commit(meta, "openssl", cve, skip_confirm=True,
+                                hash_details=hash_details)
+        logged = "\n".join(caplog.messages)
+        # NVD is always present as the canonical record.
+        assert f'https://nvd.nist.gov/vuln/detail/{cve}' in logged
+        assert f'https://security-tracker.debian.org/tracker/{cve}' in logged
+        assert f'https://ubuntu.com/security/{cve}' in logged
+        assert f'https://osv.dev/list?q={cve}' in logged
+        # No proprietary tracker reference is emitted.
+        assert 'bdba' not in logged
+
+    @patch("cve_corrector.meta_layer.get_build_path")
+    @patch("subprocess.run")
+    @patch("cve_corrector.meta_layer.run_cmd", return_value=0)
+    @patch("cve_corrector.git_ops.get_git_user_info", return_value=("A", "a@b.c"))
+    def test_references_nvd_only_without_details(self, mock_info, mock_cmd,
+                                                 mock_subrun, mock_bp, tmp_path,
+                                                 caplog):
+        """With no fix metadata, only the canonical NVD reference is listed."""
+        mock_bp.return_value = tmp_path
+        meta = tmp_path / "meta"
+        meta.mkdir()
+        mock_subrun.return_value = MagicMock(returncode=0, stdout="")
+        cve = "CVE-2026-52846"
+        import logging
+        with caplog.at_level(logging.INFO, logger="cve_corrector"):
+            create_layer_commit(meta, "openssl", cve, skip_confirm=True)
+        logged = "\n".join(caplog.messages)
+        assert f'https://nvd.nist.gov/vuln/detail/{cve}' in logged
+        assert 'security-tracker.debian.org' not in logged
+        assert 'ubuntu.com/security' not in logged
+        assert 'osv.dev' not in logged
+
 
 class TestContinueFromConflict:
     @patch("cve_corrector.workflow.get_state_dir")
@@ -657,3 +766,148 @@ class TestSetupUpstreamRemoteSeriesFallback:
         result = setup_upstream_remote(
             ws, None, tmp_path, "libsolv", hash_details=[], series=[])
         assert result is None
+
+
+class TestSetupUpstreamRemoteMismatchWarning:
+    """The patch-deduced upstream must be compared against the recipe SRC_URI
+    even when SRC_URI is used as the fetch source (regression: CVE-2026-42250,
+    fix commit in bzip2 repo while recipe SRC_URI points to bzip2-tests)."""
+
+    @patch("cve_corrector.workspace.logger")
+    @patch("cve_corrector.workspace.run_cmd", return_value=0)
+    @patch("cve_corrector.workspace.run_cmd_capture")
+    @patch("cve_corrector.workspace.find_mirror_repo", return_value=None)
+    @patch("cve_corrector.workspace.get_recipe_src_uri_git",
+           return_value="git://sourceware.org/git/bzip2-tests.git")
+    def test_warns_when_patch_repo_differs_from_src_uri(
+            self, mock_src, mock_mirror, mock_capture, mock_cmd, mock_logger,
+            tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        mock_capture.return_value = MagicMock(stdout="")  # git remote: no upstream
+        setup_upstream_remote(
+            ws, None, tmp_path, "bzip2",
+            hash_details=[{
+                "hash": "35d122a3df8b0cc4082a4d89fdc6ee99f375fe67",
+                "url": ("https://sourceware.org/cgit/bzip2/commit/"
+                        "?id=35d122a3df8b0cc4082a4d89fdc6ee99f375fe67"),
+            }])
+        warned = any(
+            "differs from recipe SRC_URI" in str(c.args[0])
+            for c in mock_logger.warning.call_args_list)
+        assert warned, "expected supply-chain mismatch warning"
+
+    @patch("cve_corrector.workspace.logger")
+    @patch("cve_corrector.workspace.run_cmd", return_value=0)
+    @patch("cve_corrector.workspace.run_cmd_capture")
+    @patch("cve_corrector.workspace.find_mirror_repo", return_value=None)
+    @patch("cve_corrector.workspace.get_recipe_src_uri_git",
+           return_value="https://github.com/openssl/openssl.git")
+    def test_no_warning_when_patch_repo_matches(
+            self, mock_src, mock_mirror, mock_capture, mock_cmd, mock_logger,
+            tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        mock_capture.return_value = MagicMock(stdout="")
+        setup_upstream_remote(
+            ws, None, tmp_path, "openssl",
+            hash_details=[{
+                "hash": "abc1234",
+                "url": "https://github.com/openssl/openssl/commit/abc1234",
+            }])
+        warned = any(
+            "differs from recipe SRC_URI" in str(c.args[0])
+            for c in mock_logger.warning.call_args_list)
+        assert not warned, "did not expect a mismatch warning for matching repos"
+
+
+class TestSetupUpstreamRemoteFixSource:
+    """On a repo mismatch, the deduced fix repo is added as a secondary
+    'upstream-fix' remote and fetched so fix commits/tags are reachable."""
+
+    @patch("cve_corrector.workspace.run_cmd", return_value=0)
+    @patch("cve_corrector.workspace.run_cmd_capture")
+    @patch("cve_corrector.workspace.find_mirror_repo", return_value=None)
+    @patch("cve_corrector.workspace.get_recipe_src_uri_git",
+           return_value="git://sourceware.org/git/bzip2-tests.git")
+    def test_adds_and_fetches_fix_remote(
+            self, mock_src, mock_mirror, mock_capture, mock_cmd, tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        mock_capture.return_value = MagicMock(stdout="")  # git remote listings
+        setup_upstream_remote(
+            ws, None, tmp_path, "bzip2",
+            hash_details=[{
+                "hash": "35d122a3df8b0cc4082a4d89fdc6ee99f375fe67",
+                "url": ("https://sourceware.org/cgit/bzip2/commit/"
+                        "?id=35d122a3df8b0cc4082a4d89fdc6ee99f375fe67"),
+            }])
+        mock_cmd.assert_any_call(
+            ['git', 'remote', 'add', 'upstream-fix',
+             'https://sourceware.org/git/bzip2'], cwd=ws)
+        mock_cmd.assert_any_call(
+            ['git', 'fetch', 'upstream-fix', '--tags', '--progress'], cwd=ws)
+
+    @patch("cve_corrector.workspace.run_cmd", return_value=0)
+    @patch("cve_corrector.workspace.run_cmd_capture")
+    @patch("cve_corrector.workspace.find_mirror_repo", return_value=None)
+    @patch("cve_corrector.workspace.get_recipe_src_uri_git",
+           return_value="https://github.com/openssl/openssl.git")
+    def test_no_fix_remote_when_repos_match(
+            self, mock_src, mock_mirror, mock_capture, mock_cmd, tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        mock_capture.return_value = MagicMock(stdout="")
+        setup_upstream_remote(
+            ws, None, tmp_path, "openssl",
+            hash_details=[{
+                "hash": "abc1234",
+                "url": "https://github.com/openssl/openssl/commit/abc1234",
+            }])
+        fix_calls = [
+            c for c in mock_cmd.call_args_list
+            if len(c.args) and isinstance(c.args[0], list)
+            and 'upstream-fix' in c.args[0]]
+        assert not fix_calls, "should not add a fix remote when repos match"
+
+
+class TestProtocolFallback:
+    """Fetches retry over an alternate transport when the first fails
+    (regression: relocated OE SDK breaks https via a bad http.sslCAInfo)."""
+
+    def test_alternate_https_to_git(self):
+        assert (_alternate_protocol_url("https://sourceware.org/git/bzip2")
+                == "git://sourceware.org/git/bzip2")
+
+    def test_alternate_git_to_https(self):
+        assert (_alternate_protocol_url("git://sourceware.org/git/bzip2.git")
+                == "https://sourceware.org/git/bzip2.git")
+
+    def test_alternate_local_path_none(self):
+        assert _alternate_protocol_url("/mirrors/bzip2.git") is None
+
+    @patch("cve_corrector.workspace.run_cmd")
+    def test_fetch_retries_with_git_protocol(self, mock_cmd, tmp_path):
+        # https fetch fails (128), set-url succeeds, git:// fetch succeeds.
+        mock_cmd.side_effect = [128, 0, 0]
+        ok = _fetch_remote(tmp_path, "upstream-fix",
+                           "https://sourceware.org/git/bzip2")
+        assert ok is True
+        mock_cmd.assert_any_call(
+            ['git', 'remote', 'set-url', 'upstream-fix',
+             'git://sourceware.org/git/bzip2'], cwd=tmp_path)
+
+    @patch("cve_corrector.workspace.run_cmd")
+    def test_fetch_succeeds_first_try_no_retry(self, mock_cmd, tmp_path):
+        mock_cmd.return_value = 0
+        ok = _fetch_remote(tmp_path, "upstream",
+                           "git://sourceware.org/git/bzip2-tests.git")
+        assert ok is True
+        assert mock_cmd.call_count == 1  # no set-url / retry
+
+    @patch("cve_corrector.workspace.run_cmd")
+    def test_fetch_fails_both_protocols(self, mock_cmd, tmp_path):
+        mock_cmd.side_effect = [128, 0, 128]  # fetch, set-url, retry-fetch
+        ok = _fetch_remote(tmp_path, "upstream-fix",
+                           "https://sourceware.org/git/bzip2")
+        assert ok is False
